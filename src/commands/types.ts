@@ -1,6 +1,7 @@
 import type { TUI } from "@earendil-works/pi-tui";
 import type { PaseoClient, PaseoAgentHandle } from "@getpaseo/client";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
+import type { AgentPermissionRequest } from "@getpaseo/protocol/agent-types";
 
 export type TimelineAppender = {
   appendSystem: (text: string) => void;
@@ -9,6 +10,12 @@ export type TimelineAppender = {
   appendError: (text: string) => void;
   clear: () => void;
   requestRender: () => void;
+  beginLocalTurn?: (userText: string) => void;
+  didStreamAssistantThisTurn?: () => boolean;
+  appendAgentDelta?: (text: string, messageId?: string) => void;
+  appendTool?: (text: string) => void;
+  appendReasoning?: (text: string) => void;
+  appendPermission?: (text: string) => void;
 };
 
 export type SessionState = {
@@ -21,6 +28,12 @@ export type SessionState = {
   wsUrl: string;
   defaultProvider: string;
   unboundTipShown: boolean;
+  /** Connection footer label (idle/connecting/connected/disconnected/…). */
+  connectionLabel: string;
+  unsubscribeUpdate: (() => void) | null;
+  unsubscribeStream: (() => void) | null;
+  pendingPermissions: AgentPermissionRequest[];
+  seenPermissionIds: Set<string>;
 };
 
 export type CommandContext = {
@@ -33,6 +46,7 @@ export type CommandContext = {
   unbindAgent: () => void;
   stop: () => void;
   setStatus: (text: string) => void;
+  statusLine: () => string;
 };
 
 export type SlashCommandDef = {

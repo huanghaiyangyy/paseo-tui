@@ -21,7 +21,7 @@ Options:
   --help                Show this help
   --bind <id>           Bind an existing agent by id
   --new                 Create a new agent on start
-  --provider <p/m>      Provider/model for --new (default: env PASEO_PROVIDER or codex/gpt-5.5)
+  --provider <p/m>      Provider/model for --new (default: env PASEO_PROVIDER or grok-gateway/grok-4.5)
   --import              Open the real provider-session import picker, then enter TUI
   --host <host[:port]>  Daemon host (maps to ws://host:port/ws)
                         Also accepts a full ws(s):// URL

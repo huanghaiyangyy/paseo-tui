@@ -43,6 +43,7 @@ export const ansi = {
   reset: RESET,
   bold: (text: string) => `\x1b[1m${text}${RESET}`,
   dim: (text: string) => `\x1b[2m${text}${RESET}`,
+  italic: (text: string) => `\x1b[3m${text}${RESET}`,
   fg: {
     fg: fg(Dracula.fg),
     cyan: fg(Dracula.cyan),
@@ -87,4 +88,20 @@ export function styleError(text: string): string {
 
 export function styleOk(text: string): string {
   return ansi.fg.green("ok") + ansi.fg.comment(" › ") + text;
+}
+
+export function styleTool(text: string): string {
+  return ansi.fg.orange(ansi.bold("tool")) + ansi.fg.comment(" › ") + text;
+}
+
+export function styleReasoning(text: string): string {
+  return (
+    ansi.fg.purple(ansi.italic("think")) +
+    ansi.fg.comment(" › ") +
+    ansi.fg.comment(text)
+  );
+}
+
+export function stylePermission(text: string): string {
+  return ansi.fg.yellow(ansi.bold("perm")) + ansi.fg.comment(" › ") + text;
 }

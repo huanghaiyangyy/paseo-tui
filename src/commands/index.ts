@@ -1,6 +1,13 @@
 import type { CommandContext, SlashCommandDef } from "./types.js";
 import { createAgent, listAgents, bindExistingAgent } from "../client/paseo.js";
 import { showSelectList, type PickerItem } from "../ui/picker.js";
+import {
+  attachAgent,
+  clearAgentBinding,
+  refreshPendingPermissions,
+  takePendingPermission,
+} from "../session/attach.js";
+import { formatPermissionBrief } from "../session/stream.js";
 
 function splitArgs(args: string): string {
   return args.trim();
@@ -13,14 +20,32 @@ function providerModelLabel(provider: string, modelId: string): string {
 async function collectReadyModelItems(
   ctx: CommandContext,
   providerFilter?: string,
-): Promise<PickerItem[]> {
+): Promise<
+  Array<
+    PickerItem & {
+      thinkingOptions?: Array<{
+        id: string;
+        label: string;
+        description?: string;
+      }>;
+    }
+  >
+> {
   const client = await ctx.ensureClient();
   ctx.timeline.appendSystem("Waiting for provider discovery…");
   const snap = await client.providers.waitForReady({
     cwd: process.cwd(),
     timeoutMs: 20_000,
   });
-  const items: PickerItem[] = [];
+  const items: Array<
+    PickerItem & {
+      thinkingOptions?: Array<{
+        id: string;
+        label: string;
+        description?: string;
+      }>;
+    }
+  > = [];
   for (const entry of snap.entries ?? []) {
     if (entry.enabled === false) continue;
     if (entry.status !== "ready") continue;
@@ -35,6 +60,11 @@ async function collectReadyModelItems(
           model.description ??
           model.label ??
           (entry.label ? `${entry.label}` : undefined),
+        thinkingOptions: model.thinkingOptions?.map((o) => ({
+          id: o.id,
+          label: o.label,
+          description: o.description,
+        })),
       });
     }
   }
@@ -63,30 +93,163 @@ async function pickProviderModel(
   return chosen;
 }
 
+async function collectThinkingOptions(
+  ctx: CommandContext,
+): Promise<PickerItem[]> {
+  const items: PickerItem[] = [];
+  const seen = new Set<string>();
+
+  const snap = ctx.state.agent?.current();
+  const features = snap?.features ?? ctx.state.agent?.features ?? null;
+  if (Array.isArray(features)) {
+    for (const feature of features) {
+      if (
+        feature &&
+        typeof feature === "object" &&
+        "type" in feature &&
+        feature.type === "select" &&
+        typeof feature.id === "string" &&
+        /think/i.test(feature.id)
+      ) {
+        for (const opt of feature.options ?? []) {
+          if (seen.has(opt.id)) continue;
+          seen.add(opt.id);
+          items.push({
+            value: opt.id,
+            label: opt.label || opt.id,
+            description: opt.description,
+          });
+        }
+      }
+    }
+  }
+
+  const modelKey = ctx.state.model ?? ctx.state.defaultProvider;
+  const { provider } = splitProviderModel(modelKey);
+  try {
+    const catalog = await collectReadyModelItems(ctx, provider || undefined);
+    for (const entry of catalog) {
+      if (entry.value !== modelKey && !entry.value.endsWith(`/${modelKey}`)) {
+        // Prefer exact model match; also accept when modelKey is provider/model
+        if (modelKey.includes("/") && entry.value !== modelKey) continue;
+      }
+      for (const opt of entry.thinkingOptions ?? []) {
+        if (seen.has(opt.id)) continue;
+        seen.add(opt.id);
+        items.push({
+          value: opt.id,
+          label: opt.label || opt.id,
+          description: opt.description,
+        });
+      }
+    }
+    // If exact match yielded nothing, take union of all thinking options for provider
+    if (items.length === 0) {
+      for (const entry of catalog) {
+        for (const opt of entry.thinkingOptions ?? []) {
+          if (seen.has(opt.id)) continue;
+          seen.add(opt.id);
+          items.push({
+            value: opt.id,
+            label: opt.label || opt.id,
+            description: opt.description,
+          });
+        }
+      }
+    }
+  } catch {
+    // catalog best-effort
+  }
+
+  return items;
+}
+
+async function applyThinkLevel(
+  ctx: CommandContext,
+  level: string,
+): Promise<void> {
+  ctx.state.thinkLevel = level;
+  ctx.setStatus(ctx.statusLine());
+
+  if (ctx.state.agentId && ctx.state.daemon) {
+    try {
+      const notice = await ctx.state.daemon.setAgentThinkingOption(
+        ctx.state.agentId,
+        level,
+      );
+      if (notice?.message) {
+        ctx.timeline.appendSystem(
+          `Think set on live agent: ${level} (${notice.message})`,
+        );
+      } else {
+        ctx.timeline.appendSystem(`Think set on live agent: ${level}`);
+      }
+      try {
+        await ctx.state.agent?.refresh();
+      } catch {
+        // refresh best-effort
+      }
+      return;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      ctx.timeline.appendSystem(
+        `Local think level set to ${level}. Live setAgentThinkingOption failed: ${message}`,
+      );
+      return;
+    }
+  }
+
+  ctx.timeline.appendSystem(
+    `Local think level set to ${level}. Will pass thinkingOptionId on next /new when possible.`,
+  );
+}
+
 async function createAndBind(
   ctx: CommandContext,
   provider: string,
 ): Promise<void> {
   const client = await ctx.ensureClient();
   const thinkingOptionId = ctx.state.thinkLevel ?? undefined;
-  ctx.timeline.appendSystem(`Creating agent with provider ${provider}…`);
+  ctx.timeline.appendSystem(
+    `Creating agent with provider ${provider}` +
+      (thinkingOptionId ? ` think=${thinkingOptionId}` : "") +
+      "…",
+  );
   const agent = await createAgent(client, {
     provider,
     cwd: process.cwd(),
     title: "paseo-tui",
     thinkingOptionId,
   });
-  ctx.state.agent = agent;
-  ctx.state.agentId = agent.id;
-  ctx.state.model = provider;
-  const snap = agent.current();
-  if (snap?.model) ctx.state.model = `${snap.provider}/${snap.model}`;
-  ctx.setStatus(statusLine(ctx));
+  await attachAgent(ctx, agent);
   ctx.timeline.appendSystem(`Created and bound agent ${agent.id}`);
-  agent.subscribe((update) => {
-    const msg = summarizeAgentUpdate(update);
-    if (msg) ctx.timeline.appendAgent(msg);
+}
+
+async function pickAndBindAgent(ctx: CommandContext): Promise<void> {
+  const client = await ctx.ensureClient();
+  const page = await listAgents(client);
+  if (page.entries.length === 0) {
+    ctx.timeline.appendSystem("No agents found. Use /new to create one.");
+    return;
+  }
+  const items: PickerItem[] = page.entries.map((entry) => {
+    const a = entry.agent;
+    const title = a.title ? ` "${a.title}"` : "";
+    return {
+      value: a.id,
+      label: `${a.id.slice(0, 12)}… [${a.status}] ${a.provider}${a.model ? "/" + a.model : ""}${title}`,
+      description: a.cwd,
+    };
   });
+  ctx.timeline.appendSystem("Select an agent to bind (Esc to cancel)…");
+  ctx.timeline.requestRender();
+  const chosen = await showSelectList(ctx.tui, items);
+  if (!chosen) {
+    ctx.timeline.appendSystem("Cancelled.");
+    return;
+  }
+  await ctx.bindAgent(chosen);
+  ctx.timeline.appendSystem(`Bound to agent ${chosen}`);
 }
 
 const helpCommand: SlashCommandDef = {
@@ -103,29 +266,31 @@ const helpCommand: SlashCommandDef = {
 
 const bindCommand: SlashCommandDef = {
   name: "bind",
-  description: "List agents and bind one, or bind by id",
+  description: "SelectList of agents, or bind by id",
   argumentHint: "[id]",
   async run(ctx, args) {
     const id = splitArgs(args);
-    const client = await ctx.ensureClient();
     if (id) {
       await ctx.bindAgent(id);
       ctx.timeline.appendSystem(`Bound to agent ${id}`);
       return;
     }
-    const page = await listAgents(client);
-    if (page.entries.length === 0) {
-      ctx.timeline.appendSystem("No agents found. Use /new to create one.");
+    await pickAndBindAgent(ctx);
+  },
+};
+
+const switchCommand: SlashCommandDef = {
+  name: "switch",
+  description: "Unbind current and bind another agent (picker)",
+  argumentHint: "[id]",
+  async run(ctx, args) {
+    const id = splitArgs(args);
+    if (id) {
+      await ctx.bindAgent(id);
+      ctx.timeline.appendSystem(`Switched to agent ${id}`);
       return;
     }
-    const lines = page.entries.map((entry) => {
-      const a = entry.agent;
-      const title = a.title ? ` "${a.title}"` : "";
-      return `  ${a.id}  [${a.status}]  ${a.provider}${a.model ? "/" + a.model : ""}${title}`;
-    });
-    ctx.timeline.appendSystem(
-      "Agents (pass an id: /bind <id>):\n" + lines.join("\n"),
-    );
+    await pickAndBindAgent(ctx);
   },
 };
 
@@ -171,7 +336,11 @@ const importCommand: SlashCommandDef = {
     }
 
     const items: PickerItem[] = entries.map((entry, index) => {
-      const title = entry.title?.trim() || entry.lastPromptPreview?.trim() || entry.firstPromptPreview?.trim() || "(untitled)";
+      const title =
+        entry.title?.trim() ||
+        entry.lastPromptPreview?.trim() ||
+        entry.firstPromptPreview?.trim() ||
+        "(untitled)";
       const when = entry.lastActivityAt
         ? new Date(entry.lastActivityAt).toLocaleString()
         : "";
@@ -210,20 +379,8 @@ const importCommand: SlashCommandDef = {
     }
     const agent = client.agents.ref(agentId);
     await agent.refresh();
-    ctx.state.agent = agent;
-    ctx.state.agentId = agent.id;
-    const snap = agent.current();
-    if (snap) {
-      ctx.state.model = snap.model
-        ? `${snap.provider}/${snap.model}`
-        : snap.provider;
-    }
-    ctx.setStatus(statusLine(ctx));
+    await attachAgent(ctx, agent);
     ctx.timeline.appendSystem(`Imported and bound agent ${agent.id}`);
-    agent.subscribe((update) => {
-      const msg = summarizeAgentUpdate(update);
-      if (msg) ctx.timeline.appendAgent(msg);
-    });
   },
 };
 
@@ -244,7 +401,7 @@ async function applyModelToLiveAgent(
   const agentId = ctx.state.agentId;
   if (!agentId || !ctx.state.agent) {
     ctx.state.model = fullOrShort;
-    ctx.setStatus(statusLine(ctx));
+    ctx.setStatus(ctx.statusLine());
     ctx.timeline.appendSystem(
       `Local model set to ${fullOrShort} (no live agent bound).`,
     );
@@ -282,7 +439,7 @@ async function applyModelToLiveAgent(
       ? fullOrShort
       : `${provider}/${applied}`;
   }
-  ctx.setStatus(statusLine(ctx));
+  ctx.setStatus(ctx.statusLine());
   ctx.timeline.appendSystem(
     `Live agent model set to ${ctx.state.model} (via setAgentModel ${applied}).`,
   );
@@ -304,7 +461,9 @@ const modelCommand: SlashCommandDef = {
         return;
       }
       const current = ctx.state.model ?? "";
-      const { provider } = splitProviderModel(current || ctx.state.defaultProvider);
+      const { provider } = splitProviderModel(
+        current || ctx.state.defaultProvider,
+      );
       const chosen = await pickProviderModel(ctx, provider || undefined);
       if (!chosen) return;
       await applyModelToLiveAgent(ctx, chosen);
@@ -316,7 +475,7 @@ const modelCommand: SlashCommandDef = {
 
 const thinkCommand: SlashCommandDef = {
   name: "think",
-  description: "Set reasoning effort (thinkingOptionId when supported)",
+  description: "Set reasoning effort; picker when bound and no args",
   argumentHint: "[level]",
   async run(ctx, args) {
     const level = splitArgs(args);
@@ -324,42 +483,174 @@ const thinkCommand: SlashCommandDef = {
       ctx.timeline.appendSystem(
         `Think level: ${ctx.state.thinkLevel ?? "(unset)"}`,
       );
-      return;
-    }
-    ctx.state.thinkLevel = level;
-    ctx.setStatus(statusLine(ctx));
-
-    if (ctx.state.agentId && ctx.state.daemon) {
-      try {
-        const notice = await ctx.state.daemon.setAgentThinkingOption(
-          ctx.state.agentId,
-          level,
-        );
-        if (notice?.message) {
-          ctx.timeline.appendSystem(
-            `Think set on live agent: ${level} (${notice.message})`,
-          );
-        } else {
-          ctx.timeline.appendSystem(`Think set on live agent: ${level}`);
-        }
-        try {
-          await ctx.state.agent?.refresh();
-        } catch {
-          // refresh best-effort
-        }
-        return;
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+      if (!ctx.state.agentId) {
         ctx.timeline.appendSystem(
-          `Local think level set to ${level}. Live setAgentThinkingOption failed: ${message}`,
+          "Pass /think <level>, or bind an agent to pick from catalog.",
         );
         return;
       }
+      const options = await collectThinkingOptions(ctx);
+      if (options.length === 0) {
+        ctx.timeline.appendSystem(
+          "No thinkingOptions found on catalog/agent features. Pass /think <level> manually.",
+        );
+        return;
+      }
+      ctx.timeline.appendSystem("Select thinking option (Esc to cancel)…");
+      ctx.timeline.requestRender();
+      const chosen = await showSelectList(ctx.tui, options);
+      if (!chosen) {
+        ctx.timeline.appendSystem("Cancelled.");
+        return;
+      }
+      await applyThinkLevel(ctx, chosen);
+      return;
     }
+    await applyThinkLevel(ctx, level);
+  },
+};
 
+async function respondPermission(
+  ctx: CommandContext,
+  behavior: "allow" | "deny",
+  args: string,
+): Promise<void> {
+  const daemon = await ctx.ensureDaemon();
+  if (!ctx.state.agentId) {
+    ctx.timeline.appendSystem("No agent bound.");
+    return;
+  }
+
+  let pending = ctx.state.pendingPermissions;
+  if (pending.length === 0) {
+    pending = await refreshPendingPermissions(ctx);
+  }
+  if (pending.length === 0) {
+    ctx.timeline.appendSystem("No pending permissions.");
+    return;
+  }
+
+  const parts = splitArgs(args).split(/\s+/).filter(Boolean);
+  let requestId: string | undefined;
+  let actionId: string | undefined;
+
+  if (parts.length >= 1) {
+    const maybeId = parts[0]!;
+    if (pending.some((p) => p.id === maybeId)) {
+      requestId = maybeId;
+      actionId = parts[1];
+    } else if (pending.length === 1) {
+      actionId = maybeId;
+    } else {
+      // Could be action id or request id — try picker
+      requestId = undefined;
+      actionId = maybeId;
+    }
+  }
+
+  let req = takePendingPermission(ctx, requestId);
+  if (!req && pending.length > 1 && !requestId) {
+    const items: PickerItem[] = pending.map((p) => ({
+      value: p.id,
+      label: `${p.title || p.name} (${p.kind})`,
+      description: p.id,
+    }));
+    ctx.timeline.appendSystem(`Select permission to ${behavior}…`);
+    ctx.timeline.requestRender();
+    const chosen = await showSelectList(ctx.tui, items);
+    if (!chosen) {
+      ctx.timeline.appendSystem("Cancelled.");
+      return;
+    }
+    req = takePendingPermission(ctx, chosen);
+  }
+  if (!req) {
+    ctx.timeline.appendError("Could not resolve pending permission request.");
+    return;
+  }
+
+  let selectedActionId = actionId;
+  if (!selectedActionId && req.actions && req.actions.length > 0) {
+    const matching = req.actions.filter((a) => a.behavior === behavior);
+    if (matching.length === 1) {
+      selectedActionId = matching[0]!.id;
+    } else if (matching.length > 1) {
+      const items: PickerItem[] = matching.map((a) => ({
+        value: a.id,
+        label: a.label || a.id,
+        description: a.behavior,
+      }));
+      const chosen = await showSelectList(ctx.tui, items);
+      if (!chosen) {
+        ctx.timeline.appendSystem("Cancelled.");
+        // put back
+        ctx.state.pendingPermissions.unshift(req);
+        return;
+      }
+      selectedActionId = chosen;
+    }
+  }
+
+  const response =
+    behavior === "allow"
+      ? {
+          behavior: "allow" as const,
+          ...(selectedActionId ? { selectedActionId } : {}),
+        }
+      : {
+          behavior: "deny" as const,
+          ...(selectedActionId ? { selectedActionId } : {}),
+          interrupt: true,
+        };
+
+  try {
+    await daemon.respondToPermission(ctx.state.agentId, req.id, response);
     ctx.timeline.appendSystem(
-      `Local think level set to ${level}. Will pass thinkingOptionId on next /new when possible.`,
+      `Permission ${req.id} → ${behavior}` +
+        (selectedActionId ? ` (${selectedActionId})` : ""),
     );
+    ctx.state.seenPermissionIds.delete(req.id);
+  } catch (err) {
+    ctx.state.pendingPermissions.unshift(req);
+    throw err;
+  }
+  ctx.setStatus(ctx.statusLine());
+}
+
+const allowCommand: SlashCommandDef = {
+  name: "allow",
+  description: "Allow a pending agent permission (via respondToPermission)",
+  argumentHint: "[requestId|actionId]",
+  async run(ctx, args) {
+    await respondPermission(ctx, "allow", args);
+  },
+};
+
+const denyCommand: SlashCommandDef = {
+  name: "deny",
+  description: "Deny a pending agent permission (via respondToPermission)",
+  argumentHint: "[requestId|actionId]",
+  async run(ctx, args) {
+    await respondPermission(ctx, "deny", args);
+  },
+};
+
+const permsCommand: SlashCommandDef = {
+  name: "perms",
+  description: "List pending permissions (refresh from agent)",
+  async run(ctx) {
+    if (!ctx.state.agentId) {
+      ctx.timeline.appendSystem("No agent bound.");
+      return;
+    }
+    const pending = await refreshPendingPermissions(ctx);
+    if (pending.length === 0) {
+      ctx.timeline.appendSystem("No pending permissions.");
+      return;
+    }
+    for (const req of pending) {
+      ctx.timeline.appendSystem(formatPermissionBrief(req));
+    }
   },
 };
 
@@ -406,10 +697,14 @@ const quitCommand: SlashCommandDef = {
 export const COMMANDS: SlashCommandDef[] = [
   helpCommand,
   bindCommand,
+  switchCommand,
   newCommand,
   importCommand,
   modelCommand,
   thinkCommand,
+  allowCommand,
+  denyCommand,
+  permsCommand,
   cwdCommand,
   detachCommand,
   quitCommand,
@@ -451,41 +746,25 @@ export async function dispatchSlash(
 }
 
 export function statusLine(ctx: CommandContext): string {
+  const conn = ctx.state.connectionLabel
+    ? `conn:${ctx.state.connectionLabel}`
+    : "conn:?";
   const bound = ctx.state.agentId
     ? `bound:${ctx.state.agentId.slice(0, 8)}`
     : "unbound";
   const model = ctx.state.model ? ` model:${ctx.state.model}` : "";
   const think = ctx.state.thinkLevel ? ` think:${ctx.state.thinkLevel}` : "";
-  return `${bound}${model}${think}`;
-}
-
-function summarizeAgentUpdate(update: unknown): string | null {
-  if (!update || typeof update !== "object") return null;
-  const u = update as Record<string, unknown>;
-  const agent = u.agent as Record<string, unknown> | undefined;
-  if (agent?.lastError && typeof agent.lastError === "string") {
-    return `error: ${agent.lastError}`;
-  }
-  if (typeof agent?.status === "string") {
-    return `status → ${agent.status}`;
-  }
-  return null;
+  const perms =
+    ctx.state.pendingPermissions.length > 0
+      ? ` perms:${ctx.state.pendingPermissions.length}`
+      : "";
+  return `${conn} · ${bound}${model}${think}${perms}`;
 }
 
 export async function bindById(ctx: CommandContext, id: string): Promise<void> {
   const client = await ctx.ensureClient();
   const agent = await bindExistingAgent(client, id);
-  ctx.state.agent = agent;
-  ctx.state.agentId = agent.id;
-  const snap = agent.current();
-  if (snap) {
-    ctx.state.model = snap.model
-      ? `${snap.provider}/${snap.model}`
-      : snap.provider;
-  }
-  ctx.setStatus(statusLine(ctx));
-  agent.subscribe((update) => {
-    const msg = summarizeAgentUpdate(update);
-    if (msg) ctx.timeline.appendAgent(msg);
-  });
+  await attachAgent(ctx, agent);
 }
+
+export { clearAgentBinding };
