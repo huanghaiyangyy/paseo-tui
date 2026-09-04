@@ -1,4 +1,6 @@
+import type { TUI } from "@earendil-works/pi-tui";
 import type { PaseoClient, PaseoAgentHandle } from "@getpaseo/client";
+import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 
 export type TimelineAppender = {
   appendSystem: (text: string) => void;
@@ -11,6 +13,7 @@ export type TimelineAppender = {
 
 export type SessionState = {
   client: PaseoClient | null;
+  daemon: DaemonClient | null;
   agent: PaseoAgentHandle | null;
   agentId: string | null;
   model: string | null;
@@ -23,7 +26,9 @@ export type SessionState = {
 export type CommandContext = {
   state: SessionState;
   timeline: TimelineAppender;
+  tui: TUI;
   ensureClient: () => Promise<PaseoClient>;
+  ensureDaemon: () => Promise<DaemonClient>;
   bindAgent: (id: string) => Promise<void>;
   unbindAgent: () => void;
   stop: () => void;

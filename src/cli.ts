@@ -5,7 +5,7 @@ export type CliArgs = {
   bindId?: string;
   createNew: boolean;
   provider?: string;
-  importStub: boolean;
+  runImport: boolean;
   host?: string;
   wsUrl: string;
   unknown: string[];
@@ -22,7 +22,7 @@ Options:
   --bind <id>           Bind an existing agent by id
   --new                 Create a new agent on start
   --provider <p/m>      Provider/model for --new (default: env PASEO_PROVIDER or codex/gpt-5.5)
-  --import              Stub import flow, then enter TUI
+  --import              Open the real provider-session import picker, then enter TUI
   --host <host[:port]>  Daemon host (maps to ws://host:port/ws)
                         Also accepts a full ws(s):// URL
 
@@ -42,7 +42,7 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): CliArgs {
   let bindId: string | undefined;
   let createNew = false;
   let provider: string | undefined;
-  let importStub = false;
+  let runImport = false;
   let host: string | undefined;
 
   for (let i = 0; i < argv.length; i++) {
@@ -72,7 +72,7 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): CliArgs {
         break;
       }
       case "--import":
-        importStub = true;
+        runImport = true;
         break;
       case "--host": {
         const next = argv[++i];
@@ -94,7 +94,7 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): CliArgs {
     bindId,
     createNew,
     provider,
-    importStub,
+    runImport,
     host,
     wsUrl: resolveWsUrl(host),
     unknown,

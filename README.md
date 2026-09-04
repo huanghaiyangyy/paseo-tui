@@ -1,18 +1,20 @@
 # paseo-tui
 
 Ghostty-first terminal TUI for a single Paseo agent session.
-## MVP scope
 
-- Bind an existing agent, create a new agent, or stub-import a provider session
+## Scope
+
+- Bind an existing agent, create a new agent (interactive model picker), or import a provider session
 - Slash commands for help, bind, new, import, model, think, cwd, detach, quit
 - Non-slash input sends a prompt to the bound agent
 - Dracula Transparent styling with ANSI only (no opaque full-screen backgrounds)
+- `/model` applies to the live agent via daemon `setAgentModel` when bound
+- `/think` stores a local preference and tries `setAgentThinkingOption` on a live agent; also passes `thinkingOptionId` on `/new` when set
 
 ## Non-goals
 
 - No embedded PTY or shell multiplexing
 - No multi-session or multi-pane agent management
-- Import UI is stubbed for now
 
 ## Requirements
 
@@ -29,35 +31,46 @@ Recommended Ghostty config so transparency shows through:
 
 ## Install and run
 
-Dependencies are declared in package.json. After installing them, run the project build script, then the start script.
+```bash
+npm install
+npm run build
+npm start
+# or: npx tsx src/main.ts
+```
 
-Development entrypoint: src/main.ts via tsx.
-
-Bin names: paseo-tui and pt.
+Bin names: `paseo-tui` and `pt`.
 
 ## CLI flags
 
-- help
-- bind id
-- new plus provider model
-- import (stub, then enter TUI)
-- host as host:port or a ws URL
+- `--help`
+- `--bind <id>`
+- `--new` plus optional `--provider <provider/model>`
+- `--import` — enter TUI and open the real provider-session import picker
+- `--host <host[:port]|ws-url>`
 
-Env vars: PASEO_WS_URL, PASEO_HOST, PASEO_PASSWORD, PASEO_PROVIDER, PASEO_CONNECT_TIMEOUT_MS (default 5000).
+Env vars: `PASEO_WS_URL`, `PASEO_HOST`, `PASEO_PASSWORD`, `PASEO_PROVIDER`, `PASEO_CONNECT_TIMEOUT_MS` (default 5000).
 
-With no flags, the TUI starts unbound and tips /bind /new /import.
+With no flags, the TUI starts unbound and tips `/bind` `/new` `/import`.
 
 ## Slash commands
 
-- help: list commands
-- bind [id]: list agents via SDK, or bind by id
-- new [provider/model]: create and bind an agent
-- import: stub (TODO daemon import RPCs)
-- model [id]: local model preference (daemon setAgentModel may need RPC)
-- think [level]: local stub reasoning effort
-- cwd: show process and agent cwd
-- detach: unbind without archiving
-- quit: stop TUI and exit
+- `help` — list commands
+- `bind [id]` – list agents via SDK, or bind by id
+- `new [provider/model]` – with no arg, opens a SelectList of ready `provider/model` entries; with arg, creates directly
+- `import` – fetch recent provider sessions for this cwd, pick one, `importAgent`, bind
+- `model [id]` – show current; with no arg and bound, optionally pick a model for the current provider; with arg, call `setAgentModel` on the live agent
+- `think [level]` – set reasoning effort (`thinkingOptionId` on create / live when supported)
+- `cwd` – show process and agent cwd
+- `detach` – unbind without archiving
+- `quit` – stop TUI and exit
+
+## Smoke (non-TTY)
+
+```bash
+node scripts/smoke-daemon.mjs
+```
+
+Lists ready providers/models and calls `fetchRecentProviderSessions` against the local daemon.
 
 ## License
 

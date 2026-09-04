@@ -31,7 +31,7 @@ async function main(): Promise<void> {
     bindId: args.bindId,
     createNew: args.createNew,
     provider: args.provider,
-    importStub: args.importStub,
+    runImport: args.runImport,
   });
 }
 

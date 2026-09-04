@@ -11,6 +11,7 @@ import {
   VStack,
 } from "@earendil-works/pi-tui";
 import type { PaseoClient } from "@getpaseo/client";
+import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import {
   autocompleteCommands,
   bindById,
@@ -18,7 +19,7 @@ import {
   statusLine,
 } from "../commands/index.js";
 import type { CommandContext, SessionState } from "../commands/types.js";
-import { connectClient } from "../client/paseo.js";
+import { connectBoth } from "../client/paseo.js";
 import { createHeader, createStatusFooter } from "./header.js";
 import { TimelineView } from "./timeline.js";
 import { editorTheme, ansi } from "./theme-dracula.js";
@@ -28,7 +29,8 @@ export type AppOptions = {
   bindId?: string;
   createNew?: boolean;
   provider?: string;
-  importStub?: boolean;
+  /** Enter TUI and auto-open the real import picker. */
+  runImport?: boolean;
 };
 
 export async function startApp(options: AppOptions): Promise<void> {
@@ -37,6 +39,7 @@ export async function startApp(options: AppOptions): Promise<void> {
 
   const state: SessionState = {
     client: null,
+    daemon: null,
     agent: null,
     agentId: null,
     model: defaultProvider,
@@ -93,9 +96,13 @@ export async function startApp(options: AppOptions): Promise<void> {
     stopping = true;
     void (async () => {
       try {
-        await state.client?.close();
+        await state.daemon?.close();
       } catch {
-        // ignore close errors on shutdown
+        try {
+          await state.client?.close();
+        } catch {
+          // ignore close errors on shutdown
+        }
       }
       tui.stop();
       process.exit(0);
@@ -109,22 +116,38 @@ export async function startApp(options: AppOptions): Promise<void> {
     tui.requestRender();
   };
 
-  const ensureClient = async (): Promise<PaseoClient> => {
-    if (state.client) {
+  const ensureConnected = async (): Promise<{
+    client: PaseoClient;
+    daemon: DaemonClient;
+  }> => {
+    if (state.client && state.daemon) {
       state.client.ensureConnected();
-      return state.client;
+      return { client: state.client, daemon: state.daemon };
     }
     timeline.appendSystem(`Connecting to ${state.wsUrl}…`);
-    const client = await connectClient({ url: state.wsUrl });
-    state.client = client;
+    const conn = await connectBoth({ url: state.wsUrl });
+    state.client = conn.client;
+    state.daemon = conn.daemon;
     timeline.appendSystem("Connected to Paseo daemon.");
+    return conn;
+  };
+
+  const ensureClient = async (): Promise<PaseoClient> => {
+    const { client } = await ensureConnected();
     return client;
+  };
+
+  const ensureDaemon = async (): Promise<DaemonClient> => {
+    const { daemon } = await ensureConnected();
+    return daemon;
   };
 
   const ctx: CommandContext = {
     state,
     timeline,
+    tui,
     ensureClient,
+    ensureDaemon,
     bindAgent: async (id: string) => {
       await bindById(ctx, id);
     },
@@ -152,7 +175,7 @@ export async function startApp(options: AppOptions): Promise<void> {
 
       if (!state.agent) {
         timeline.appendError(
-          "No agent bound. Use /bind, /new, or /import (stub).",
+          "No agent bound. Use /bind, /new, or /import.",
         );
         return;
       }
@@ -187,14 +210,8 @@ export async function startApp(options: AppOptions): Promise<void> {
   });
 
   timeline.appendSystem(
-    "paseo-tui MVP — slash commands available; plain text prompts the bound agent.",
+    "paseo-tui — slash commands available; plain text prompts the bound agent.",
   );
-
-  if (options.importStub) {
-    timeline.appendSystem(
-      "CLI --import: stub only. TODO: daemon import RPCs. Entering TUI unbound.",
-    );
-  }
 
   tui.start();
 
@@ -204,8 +221,12 @@ export async function startApp(options: AppOptions): Promise<void> {
       timeline.appendSystem(`Bound to agent ${options.bindId}`);
     } else if (options.createNew) {
       await dispatchSlash(ctx, `/new ${state.defaultProvider}`);
-    } else if (!options.importStub) {
-      timeline.appendSystem("Tip: /bind  ·  /new  ·  /import  ·  /help");
+    } else if (options.runImport) {
+      await dispatchSlash(ctx, "/import");
+    } else {
+      timeline.appendSystem(
+        "Tip: /bind  ·  /new (picker)  ·  /import  ·  /model  ·  /help",
+      );
       state.unboundTipShown = true;
     }
     setStatus(statusLine(ctx));
