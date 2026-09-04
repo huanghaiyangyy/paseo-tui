@@ -20,7 +20,13 @@ import {
   statusLine,
 } from "../commands/index.js";
 import type { CommandContext, SessionState } from "../commands/types.js";
-import { connectBoth } from "../client/paseo.js";
+import {
+  connectBoth,
+  footerConnectionLabel,
+  formatConnectError,
+  isReconnectEnabled,
+} from "../client/paseo.js";
+import { restoreAgentAfterReconnect } from "../session/attach.js";
 import { createHeader, createStatusFooter } from "./header.js";
 import { TimelineView } from "./timeline.js";
 import { editorTheme, ansi } from "./theme-dracula.js";
@@ -36,33 +42,10 @@ export type AppOptions = {
 
 const DEFAULT_PROVIDER = "grok-gateway/grok-4.5";
 
-function formatConnectError(err: unknown, wsUrl: string): string {
-  const message = err instanceof Error ? err.message : String(err);
-  const hints: string[] = [];
-  if (/timeout|timed out/i.test(message)) {
-    hints.push(
-      "Connect timed out — is the Paseo daemon listening?",
-      `Tried ${wsUrl}`,
-      "Check PASEO_WS_URL / --host, and PASEO_CONNECT_TIMEOUT_MS.",
-    );
-  } else if (/ECONNREFUSED|not open|connect/i.test(message)) {
-    hints.push(
-      "Connection refused — start the daemon (default ws://127.0.0.1:6767/ws).",
-      `Tried ${wsUrl}`,
-    );
-  } else {
-    hints.push(`Failed to connect to ${wsUrl}: ${message}`);
-  }
-  hints.push(
-    "Auto-reconnect is disabled for TUI sessions to avoid duplicate subscriptions;",
-    "use /bind or retry after fixing the daemon.",
-  );
-  return hints.join("\n");
-}
-
 export async function startApp(options: AppOptions): Promise<void> {
   const defaultProvider =
     options.provider ?? process.env.PASEO_PROVIDER ?? DEFAULT_PROVIDER;
+  const reconnectEnabled = isReconnectEnabled();
 
   const state: SessionState = {
     client: null,
@@ -75,6 +58,9 @@ export async function startApp(options: AppOptions): Promise<void> {
     defaultProvider,
     unboundTipShown: false,
     connectionLabel: "idle",
+    reconnectEnabled,
+    everConnected: false,
+    unsubscribeConnection: null,
     unsubscribeUpdate: null,
     unsubscribeStream: null,
     pendingPermissions: [],
@@ -126,17 +112,24 @@ export async function startApp(options: AppOptions): Promise<void> {
   }
 
   let stopping = false;
-  let unsubConnection: (() => void) | null = null;
+  let restoringAfterReconnect = false;
+  let announcedDisconnect = false;
 
   const stop = (): void => {
     if (stopping) return;
     stopping = true;
     void (async () => {
       try {
-        unsubConnection?.();
+        state.daemon?.setReconnectEnabled(false);
       } catch {
         // ignore
       }
+      try {
+        state.unsubscribeConnection?.();
+      } catch {
+        // ignore
+      }
+      state.unsubscribeConnection = null;
       try {
         clearAgentBinding(ctx);
       } catch {
@@ -176,15 +169,82 @@ export async function startApp(options: AppOptions): Promise<void> {
       return;
     }
     const cs = state.daemon.getConnectionState();
-    if (cs.status === "disconnected") {
-      state.connectionLabel = cs.reason
-        ? `disconnected(${cs.reason})`
-        : "disconnected";
-    } else if (cs.status === "connecting") {
-      state.connectionLabel = `connecting#${cs.attempt}`;
-    } else {
-      state.connectionLabel = cs.status;
+    state.connectionLabel = footerConnectionLabel({
+      status: cs.status,
+      attempt: "attempt" in cs ? cs.attempt : undefined,
+      reason: "reason" in cs ? cs.reason : undefined,
+      reconnectEnabled: state.reconnectEnabled,
+      everConnected: state.everConnected,
+      stopping,
+    });
+  };
+
+  const onConnectionStatus = (): void => {
+    if (stopping) return;
+    const prev = state.connectionLabel;
+    const wasEver = state.everConnected;
+    const cs = state.daemon?.getConnectionState();
+    if (!cs) return;
+
+    if (cs.status === "connected") {
+      const isReconnect = wasEver;
+      state.everConnected = true;
+      announcedDisconnect = false;
+      syncConnectionLabel();
+      setStatus(statusLine(ctx));
+      if (isReconnect && !restoringAfterReconnect) {
+        restoringAfterReconnect = true;
+        void (async () => {
+          try {
+            await restoreAgentAfterReconnect(ctx);
+            timeline.appendSystem("Reconnected to daemon; subscriptions restored.");
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            timeline.appendError(
+              `Reconnect succeeded but failed to restore agent binding: ${message}`,
+            );
+          } finally {
+            restoringAfterReconnect = false;
+            syncConnectionLabel();
+            setStatus(statusLine(ctx));
+          }
+        })();
+      }
+      return;
     }
+
+    syncConnectionLabel();
+    setStatus(statusLine(ctx));
+
+    if (cs.status === "disconnected" && wasEver && !announcedDisconnect) {
+      announcedDisconnect = true;
+      if (state.reconnectEnabled) {
+        timeline.appendSystem(
+          "Daemon connection lost — reconnecting with backoff…",
+        );
+      } else {
+        timeline.appendError(
+          "Daemon connection lost. Auto-reconnect is disabled (PASEO_RECONNECT=0); fix the daemon, then /bind again.",
+        );
+      }
+    } else if (
+      cs.status === "connecting" &&
+      wasEver &&
+      prev !== "reconnecting"
+    ) {
+      // Footer already shows reconnecting via syncConnectionLabel.
+    }
+  };
+
+  const wireConnectionWatcher = (daemon: DaemonClient): void => {
+    try {
+      state.unsubscribeConnection?.();
+    } catch {
+      // ignore
+    }
+    state.unsubscribeConnection = daemon.subscribeConnectionStatus(() => {
+      onConnectionStatus();
+    });
   };
 
   const ensureConnected = async (): Promise<{
@@ -192,10 +252,22 @@ export async function startApp(options: AppOptions): Promise<void> {
     daemon: DaemonClient;
   }> => {
     if (state.client && state.daemon) {
+      const cs = state.daemon.getConnectionState();
+      if (cs.status === "connected" || cs.status === "connecting") {
+        syncConnectionLabel();
+        return { client: state.client, daemon: state.daemon };
+      }
+      // Disconnected but client still held — rely on SDK reconnect or nudge connect.
       try {
-        state.client.ensureConnected();
+        if (state.reconnectEnabled) {
+          state.daemon.ensureConnected();
+        } else {
+          await state.daemon.connect();
+        }
       } catch (err) {
-        timeline.appendError(formatConnectError(err, state.wsUrl));
+        timeline.appendError(
+          formatConnectError(err, state.wsUrl, state.reconnectEnabled),
+        );
         throw err;
       }
       syncConnectionLabel();
@@ -206,25 +278,26 @@ export async function startApp(options: AppOptions): Promise<void> {
     setStatus(statusLine(ctx));
     let conn;
     try {
-      conn = await connectBoth({ url: state.wsUrl });
+      conn = await connectBoth({
+        url: state.wsUrl,
+        reconnectEnabled: state.reconnectEnabled,
+      });
     } catch (err) {
       state.connectionLabel = "disconnected";
       setStatus(statusLine(ctx));
-      timeline.appendError(formatConnectError(err, state.wsUrl));
+      timeline.appendError(
+        formatConnectError(err, state.wsUrl, state.reconnectEnabled),
+      );
       throw err;
     }
     state.client = conn.client;
     state.daemon = conn.daemon;
-    unsubConnection?.();
-    unsubConnection = conn.daemon.subscribeConnectionStatus(() => {
-      syncConnectionLabel();
-      setStatus(statusLine(ctx));
-      if (state.daemon?.getConnectionState().status === "disconnected") {
-        timeline.appendError(
-          "Daemon connection lost. Auto-reconnect is disabled for this TUI; restart or fix the daemon, then /bind again.",
-        );
-      }
-    });
+    // Wire before marking everConnected so a sync status callback does not
+    // treat the first connect as a reconnect restore.
+    wireConnectionWatcher(conn.daemon);
+    if (!state.everConnected) {
+      state.everConnected = true;
+    }
     syncConnectionLabel();
     timeline.appendSystem("Connected to Paseo daemon.");
     return conn;
@@ -325,8 +398,13 @@ export async function startApp(options: AppOptions): Promise<void> {
   });
 
   timeline.appendSystem(
-    "paseo-tui — slash commands available; plain text prompts the bound agent.",
+    "paseo-tui — one window, one agent session. Slash commands available; plain text prompts the bound agent.",
   );
+  if (reconnectEnabled) {
+    timeline.appendSystem(
+      "Auto-reconnect on (PASEO_RECONNECT=0 to disable).",
+    );
+  }
 
   tui.start();
 

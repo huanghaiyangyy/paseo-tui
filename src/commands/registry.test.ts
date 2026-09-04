@@ -20,6 +20,9 @@ function mockCtx(partial?: Partial<SessionState>): CommandContext {
     defaultProvider: "grok-gateway/grok-4.5",
     unboundTipShown: false,
     connectionLabel: "connected",
+    reconnectEnabled: true,
+    everConnected: true,
+    unsubscribeConnection: null,
     unsubscribeUpdate: null,
     unsubscribeStream: null,
     pendingPermissions: [],
@@ -93,5 +96,11 @@ describe("command registry", () => {
     assert.match(line, /bound:abcdefgh/);
     assert.match(line, /model:grok-gateway\/grok-4\.5/);
     assert.match(line, /think:high/);
+  });
+
+  it("statusLine shows reconnecting footer label", () => {
+    const line = statusLine(mockCtx({ connectionLabel: "reconnecting" }));
+    assert.match(line, /conn:reconnecting/);
+    assert.match(line, /unbound/);
   });
 });

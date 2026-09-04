@@ -1,6 +1,12 @@
 # paseo-tui
 
-Ghostty-first terminal TUI for a single Paseo agent session.
+Ghostty-first terminal TUI for a **single** Paseo agent session.
+
+## One window, one session
+
+Each `paseo-tui` process binds **one** agent. There is no split-pane or
+multi-agent layout in one TUI. To work with another agent at the same time,
+open another Ghostty (or terminal) window and run `paseo-tui` again.
 
 ## Scope
 
@@ -11,12 +17,38 @@ Ghostty-first terminal TUI for a single Paseo agent session.
 - `/model` applies to the live agent via daemon `setAgentModel` when bound
 - `/think` stores a local preference, opens a picker when bound, and tries `setAgentThinkingOption`; also passes `thinkingOptionId` on `/new`
 - Default provider/model: `grok-gateway/grok-4.5` (`PASEO_PROVIDER` overrides)
+- **Safe auto-reconnect** after unexpected disconnect (see below)
 
 ## Non-goals
 
 - No embedded PTY or shell multiplexing
-- No multi-session or multi-pane agent management
-- No automatic WebSocket reconnect (disabled so TUI subscriptions stay single-owned; footer shows connection state)
+- No multi-session or multi-pane agent management in one window
+- No split-screen TUI
+
+## Auto-reconnect
+
+On unexpected daemon disconnect, the footer shows `conn:reconnecting` and the
+SDK retries with exponential backoff (about **1s → 2s → 4s …**, capped near
+**30s**). `/quit` (and Ctrl+C) cancels reconnect and closes the client.
+
+On a successful reconnect the TUI:
+
+1. Unsubscribes previous agent/timeline handlers (avoids duplicate listeners)
+2. Refreshes the currently bound agent (if any)
+3. Re-subscribes to agent updates + timeline and restores permission watchers
+4. Appends one system line: `Reconnected to daemon; subscriptions restored.`
+
+Disable with:
+
+```bash
+PASEO_RECONNECT=0 paseo-tui
+```
+
+Reconnect is **enabled by default** (`reconnect.enabled: true`). Values
+`0`, `false`, `off`, or `no` turn it off.
+
+Footer connection labels: `conn:connected` | `conn:reconnecting` |
+`conn:disconnected` (brief `connecting` / `idle` only before the first link).
 
 ## Requirements
 
@@ -59,7 +91,9 @@ Bin names: `paseo-tui` and `pt`.
 - `--import` — enter TUI and open the real provider-session import picker
 - `--host <host[:port]|ws-url>`
 
-Env vars: `PASEO_WS_URL`, `PASEO_HOST`, `PASEO_PASSWORD`, `PASEO_PROVIDER`, `PASEO_CONNECT_TIMEOUT_MS` (default 5000).
+Env vars: `PASEO_WS_URL`, `PASEO_HOST`, `PASEO_PASSWORD`, `PASEO_PROVIDER`,
+`PASEO_CONNECT_TIMEOUT_MS` (default 5000), `PASEO_RECONNECT` (default on;
+`0`/`false`/`off`/`no` disables).
 
 With no flags, the TUI starts unbound and tips `/bind` `/new` `/import`.
 
@@ -75,7 +109,7 @@ With no flags, the TUI starts unbound and tips `/bind` `/new` `/import`.
 - `switch [id]` – rebind another agent
 - `cwd` – show process and agent cwd
 - `detach` – unbind without archiving
-- `quit` – stop TUI and exit
+- `quit` – stop TUI and exit (cancels reconnect)
 
 ## Tests / smoke
 

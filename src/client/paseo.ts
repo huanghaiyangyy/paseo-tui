@@ -1,9 +1,12 @@
 import { createPaseoApi, type PaseoClient, type PaseoAgentHandle, type PaseoAgentListResult } from "@getpaseo/client";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
+import { reconnectOptions } from "./reconnect.js";
 
 export type ConnectOptions = {
   url: string;
   password?: string;
+  /** Override env; when omitted, PASEO_RECONNECT controls SDK reconnect. */
+  reconnectEnabled?: boolean;
 };
 
 export type PaseoConnection = {
@@ -18,13 +21,22 @@ function connectTimeoutMs(): number {
 }
 
 function buildDaemon(options: ConnectOptions): DaemonClient {
+  const reconnect = reconnectOptions();
+  const enabled =
+    options.reconnectEnabled !== undefined
+      ? options.reconnectEnabled
+      : reconnect.enabled;
   return new DaemonClient({
     url: options.url,
     clientId: `paseo-tui-${process.pid}-${Date.now()}`,
     clientType: "cli",
     password: options.password ?? process.env.PASEO_PASSWORD,
     connectTimeoutMs: connectTimeoutMs(),
-    reconnect: { enabled: false },
+    reconnect: {
+      enabled,
+      baseDelayMs: reconnect.baseDelayMs,
+      maxDelayMs: reconnect.maxDelayMs,
+    },
   });
 }
 
@@ -115,3 +127,5 @@ export function resolveWsUrl(hostOrUrl?: string): string {
 function joinWsPath(url: string): string {
   return url.replace(/\/+$/, "") + "/ws";
 }
+
+export { isReconnectEnabled, reconnectOptions, footerConnectionLabel, reconnectDelayMs, formatConnectError } from "./reconnect.js";

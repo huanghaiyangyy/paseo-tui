@@ -32,6 +32,10 @@ Environment:
   PASEO_PASSWORD        Daemon password when required
   PASEO_PROVIDER        Default provider/model for /new and --new
   PASEO_CONNECT_TIMEOUT_MS  Daemon connect timeout in ms (default 5000)
+  PASEO_RECONNECT       Auto-reconnect after disconnect (default on; 0/false/off/no disables)
+
+One window = one agent session. Open another Ghostty for another agent.
+No split-pane multi-session and no embedded PTY/shell.
 
 Without flags, starts unbound and tips you to use /bind, /new, or /import.
 `;

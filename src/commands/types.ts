@@ -28,8 +28,14 @@ export type SessionState = {
   wsUrl: string;
   defaultProvider: string;
   unboundTipShown: boolean;
-  /** Connection footer label (idle/connecting/connected/disconnected/…). */
+  /** Connection footer label (connected|reconnecting|disconnected|…). */
   connectionLabel: string;
+  /** Whether SDK/app auto-reconnect is enabled for this session. */
+  reconnectEnabled: boolean;
+  /** True after at least one successful daemon connect. */
+  everConnected: boolean;
+  /** Unsubscribe fns — always call before re-subscribe to avoid duplicates. */
+  unsubscribeConnection: (() => void) | null;
   unsubscribeUpdate: (() => void) | null;
   unsubscribeStream: (() => void) | null;
   pendingPermissions: AgentPermissionRequest[];

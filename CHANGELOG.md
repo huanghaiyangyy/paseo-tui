@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.1 – 2026-09-05
+
+### Safe auto-reconnect (single session)
+
+- Enable SDK WebSocket reconnect by default (`baseDelayMs` 1s, `maxDelayMs` ~30s).
+- On unexpected disconnect: footer shows conn:reconnecting; timeline notes reconnect-in-progress.
+- On success: unsubscribe old handlers, refresh + re-bind current agent (timeline/agent subscribe + permission watchers), one system line in the timeline.
+- /quit and Ctrl+C disables reconnect and closes cleanly.
+- Disable with PASEO_RECONNECT=0 (also false / off / no).
+- Clearer connect-failure messages; footer labels normalized to connected|reconnecting|disconnected.
+- README: one-window-one-session model; document reconnect; confirm no multi-pane / no PTY.
+- Unit tests for reconnect env, backoff, footer labels, and connect errors (no TTY).
+
 ## 0.2.0 – 2026-09-04
 
 ### P1 — daily usability
