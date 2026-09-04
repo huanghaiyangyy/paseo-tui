@@ -31,6 +31,7 @@ Environment:
   PASEO_HOST            Host or host:port (alternative to --host)
   PASEO_PASSWORD        Daemon password when required
   PASEO_PROVIDER        Default provider/model for /new and --new
+  PASEO_CONNECT_TIMEOUT_MS  Daemon connect timeout in ms (default 5000)
 
 Without flags, starts unbound and tips you to use /bind, /new, or /import.
 `;

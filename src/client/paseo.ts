@@ -11,9 +11,17 @@ export type ConnectOptions = {
 };
 
 export function createClient(options: ConnectOptions): PaseoClient {
+  const timeoutRaw = process.env.PASEO_CONNECT_TIMEOUT_MS;
+  const connectTimeoutMs = timeoutRaw
+    ? Number.parseInt(timeoutRaw, 10)
+    : 5_000;
   return createPaseoClient({
     url: options.url,
     password: options.password ?? process.env.PASEO_PASSWORD,
+    connectTimeoutMs: Number.isFinite(connectTimeoutMs) && connectTimeoutMs > 0
+      ? connectTimeoutMs
+      : 5_000,
+    reconnect: { enabled: false },
   });
 }
 

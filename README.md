@@ -43,7 +43,7 @@ Bin names: paseo-tui and pt.
 - import (stub, then enter TUI)
 - host as host:port or a ws URL
 
-Env vars: PASEO_WS_URL, PASEO_HOST, PASEO_PASSWORD, PASEO_PROVIDER.
+Env vars: PASEO_WS_URL, PASEO_HOST, PASEO_PASSWORD, PASEO_PROVIDER, PASEO_CONNECT_TIMEOUT_MS (default 5000).
 
 With no flags, the TUI starts unbound and tips /bind /new /import.
 
