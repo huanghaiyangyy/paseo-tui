@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.3 – 2026-09-05
+
+### UI polish (Pi / Codex-like chrome)
+
+- **Header bar**: live `HeaderBar` with branded title + compact chips
+  (`model · think · agent · conn`) and a muted `─` rule; updates with status.
+- **Timeline**: Pi-like role labels (`❯ you`, `✦ agent`, dim italic `think`,
+  orange `⚙ tool`); **Markdown** agent replies (Dracula `MarkdownTheme`);
+  mid-stream `Text` + finalize to Markdown; thin `Spacer(1)` between turns.
+- **Footer**: two-tone status (`conn · bound` left, `model · think` right)
+  with width-safe truncation.
+- **Welcome**: short tip line instead of verbose MVP copy.
+- **Picker**: pink selected highlight (›-style theming).
+- Ghostty transparency preserved — no full-screen opaque backgrounds.
+
 ## 0.2.2 – 2026-09-05
 
 ### Fix idle / grok-gateway agent bind

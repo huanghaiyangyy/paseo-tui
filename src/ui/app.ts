@@ -27,9 +27,9 @@ import {
   isReconnectEnabled,
 } from "../client/paseo.js";
 import { restoreAgentAfterReconnect } from "../session/attach.js";
-import { createHeader, createStatusFooter } from "./header.js";
+import { HeaderBar, StatusFooter } from "./header.js";
 import { TimelineView } from "./timeline.js";
-import { editorTheme, ansi } from "./theme-dracula.js";
+import { editorTheme } from "./theme-dracula.js";
 
 export type AppOptions = {
   wsUrl: string;
@@ -75,21 +75,23 @@ export async function startApp(options: AppOptions): Promise<void> {
   const timeline = new TimelineView();
   timeline.setRequestRender(() => tui.requestRender());
 
-  const header = createHeader();
+  const header = new HeaderBar("paseo-tui");
+  const footer = new StatusFooter({
+    conn: "idle",
+    bound: "unbound",
+    model: defaultProvider,
+  });
   const editor = new Editor(tui, editorTheme);
   editor.setAutocompleteProvider(
     new CombinedAutocompleteProvider(autocompleteCommands(), process.cwd()),
   );
 
-  const editorAndFooter = new VStack([
-    editor,
-    createStatusFooter(ansi.fg.comment("conn:idle · unbound")),
-  ]);
+  const editorAndFooter = new VStack([editor, footer]);
 
   if (isViewportTUI(tui)) {
     tui.setLayoutRoot(
       new VStack([
-        { component: header, basis: "auto", shrink: 0, minSize: 1 },
+        { component: header, basis: "auto", shrink: 0, minSize: 2 },
         {
           component: new ScrollView(timeline.container, {
             follow: "end",
@@ -156,11 +158,27 @@ export async function startApp(options: AppOptions): Promise<void> {
     })();
   };
 
-  const setStatus = (text: string): void => {
-    editorAndFooter.clear();
-    editorAndFooter.addChild(editor);
-    editorAndFooter.addChild(createStatusFooter(ansi.fg.comment(text)));
+  const refreshChrome = (extra?: string | null): void => {
+    header.setChips({
+      model: state.model,
+      think: state.thinkLevel,
+      agentId: state.agentId,
+      conn: state.connectionLabel,
+      extra: extra ?? null,
+    });
+    footer.setParts({
+      conn: state.connectionLabel,
+      bound: state.agentId ? state.agentId.slice(0, 8) : "unbound",
+      model: state.model,
+      think: state.thinkLevel,
+      extra: extra ?? null,
+    });
     tui.requestRender();
+  };
+
+  const setStatus = (text: string): void => {
+    const running = /\brunning/.test(text) ? "running…" : null;
+    refreshChrome(running);
   };
 
   const syncConnectionLabel = (): void => {
@@ -383,6 +401,7 @@ export async function startApp(options: AppOptions): Promise<void> {
         const message = err instanceof Error ? err.message : String(err);
         timeline.appendError(message);
       } finally {
+        timeline.finalizeAgentStream();
         setStatus(statusLine(ctx));
       }
     })();
@@ -397,16 +416,13 @@ export async function startApp(options: AppOptions): Promise<void> {
     return undefined;
   });
 
-  timeline.appendSystem(
-    "paseo-tui — one window, one agent session. Slash commands available; plain text prompts the bound agent.",
-  );
+  timeline.appendSystem("paseo-tui · one agent · type to chat · / for commands");
   if (reconnectEnabled) {
-    timeline.appendSystem(
-      "Auto-reconnect on (PASEO_RECONNECT=0 to disable).",
-    );
+    timeline.appendSystem("auto-reconnect on (PASEO_RECONNECT=0 to disable)");
   }
 
   tui.start();
+  refreshChrome();
 
   try {
     if (options.bindId) {
@@ -417,9 +433,7 @@ export async function startApp(options: AppOptions): Promise<void> {
     } else if (options.runImport) {
       await dispatchSlash(ctx, "/import");
     } else {
-      timeline.appendSystem(
-        "Tip: /bind  ·  /switch  ·  /new (picker)  ·  /import  ·  /model  ·  /think  ·  /help",
-      );
+      timeline.appendSystem("tip · /bind  /new  /import  /model  /think  /help");
       state.unboundTipShown = true;
     }
     setStatus(statusLine(ctx));

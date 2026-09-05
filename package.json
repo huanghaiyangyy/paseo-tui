@@ -1,6 +1,6 @@
 {
   "name": "paseo-tui",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Ghostty-first terminal TUI for a single Paseo agent session",
   "type": "module",
   "engines": {

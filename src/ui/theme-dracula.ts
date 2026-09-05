@@ -4,6 +4,9 @@
  * background-opacity / blur can show through.
  */
 
+import type { MarkdownTheme } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+
 export const Dracula = {
   bg: "#282a36",
   fg: "#f8f8f2",
@@ -62,46 +65,128 @@ export const ansi = {
 export const editorTheme = {
   borderColor: ansi.fg.purple,
   selectList: {
-    selectedPrefix: ansi.fg.pink,
-    selectedText: ansi.fg.fg,
+    // Library hardcodes "→ "; pink selectedText is the visible highlight.
+    selectedPrefix: (text: string) => ansi.fg.pink(`› ${text}`),
+    selectedText: ansi.fg.pink,
     description: ansi.fg.comment,
     scrollInfo: ansi.fg.comment,
     noMatch: ansi.fg.orange,
   },
 };
 
-export function styleUser(text: string): string {
-  return ansi.fg.cyan(ansi.bold("you")) + ansi.fg.comment(" › ") + text;
+/** Dracula MarkdownTheme for agent replies (no opaque backgrounds). */
+export const markdownTheme: MarkdownTheme = {
+  heading: (text) => ansi.fg.purple(ansi.bold(text)),
+  link: (text) => ansi.fg.cyan(text),
+  linkUrl: (text) => ansi.fg.comment(text),
+  code: (text) => ansi.fg.pink(text),
+  codeBlock: (text) => ansi.fg.fg(text),
+  codeBlockBorder: (text) => ansi.fg.comment(text),
+  quote: (text) => ansi.fg.comment(ansi.italic(text)),
+  quoteBorder: (text) => ansi.fg.purple(text),
+  hr: (text) => ansi.fg.comment(text),
+  listBullet: (text) => ansi.fg.cyan(text),
+  bold: (text) => ansi.bold(text),
+  italic: (text) => ansi.italic(text),
+  strikethrough: (text) => `\x1b[9m${text}${RESET}`,
+  underline: (text) => `\x1b[4m${text}${RESET}`,
+  codeBlockIndent: "  ",
+};
+
+export const markdownDefaultStyle = {
+  color: ansi.fg.fg,
+};
+
+/** Compact chip for header/status (muted key, bright value). */
+export function chip(label: string, value: string, accent?: (t: string) => string): string {
+  const paint = accent ?? ansi.fg.fg;
+  return ansi.fg.comment(label) + ansi.fg.comment(":") + paint(value);
 }
 
-export function styleAgent(text: string): string {
-  return ansi.fg.green(ansi.bold("agent")) + ansi.fg.comment(" › ") + text;
+export function joinChips(parts: Array<string | null | undefined>, sep = " · "): string {
+  return parts.filter((p): p is string => !!p && p.length > 0).join(ansi.fg.comment(sep));
+}
+
+export function mutedRule(width: number): string {
+  const n = Math.max(0, width);
+  return ansi.fg.comment("─".repeat(n));
+}
+
+/**
+ * Two-tone status line: left flush, right flush, truncated to width.
+ * Uses a single ─ gutter when both sides fit with a gap.
+ */
+export function formatTwoToneStatus(
+  left: string,
+  right: string,
+  width: number,
+): string {
+  const w = Math.max(1, width);
+  if (!right) return truncateToWidth(left, w);
+  if (!left) {
+    const r = truncateToWidth(right, w);
+    const pad = Math.max(0, w - visibleWidth(r));
+    return " ".repeat(pad) + r;
+  }
+  const gapMin = 2;
+  const leftMax = Math.max(1, Math.floor(w * 0.55));
+  let L = truncateToWidth(left, leftMax);
+  let R = truncateToWidth(right, Math.max(1, w - visibleWidth(L) - gapMin));
+  const used = visibleWidth(L) + visibleWidth(R);
+  if (used + gapMin > w) {
+    L = truncateToWidth(left, Math.max(1, w - visibleWidth(R) - gapMin));
+  }
+  const gap = Math.max(gapMin, w - visibleWidth(L) - visibleWidth(R));
+  const mid =
+    gap >= 3
+      ? " " + ansi.fg.comment("─".repeat(Math.max(1, gap - 2))) + " "
+      : " ".repeat(gap);
+  return L + mid + R;
+}
+
+// ── Role labels (Pi-like) ───────────────────────────────────────────
+
+export function labelYou(): string {
+  return ansi.fg.pink("❯") + " " + ansi.fg.cyan(ansi.bold("you"));
+}
+
+export function labelAgent(): string {
+  return ansi.fg.green("✦") + " " + ansi.fg.green(ansi.bold("agent"));
+}
+
+export function styleUser(text: string): string {
+  return labelYou() + "\n" + text;
+}
+
+export function styleAgentPlain(text: string): string {
+  return labelAgent() + "\n" + text;
 }
 
 export function styleSystem(text: string): string {
-  return ansi.fg.comment("· ") + ansi.fg.comment(text);
+  return ansi.dim(ansi.fg.comment(text));
 }
 
 export function styleError(text: string): string {
-  return ansi.fg.red("error") + ansi.fg.comment(" › ") + text;
+  return ansi.fg.red(ansi.bold("error")) + ansi.fg.comment(" · ") + text;
 }
 
 export function styleOk(text: string): string {
-  return ansi.fg.green("ok") + ansi.fg.comment(" › ") + text;
+  return ansi.fg.green("ok") + ansi.fg.comment(" · ") + text;
 }
 
 export function styleTool(text: string): string {
-  return ansi.fg.orange(ansi.bold("tool")) + ansi.fg.comment(" › ") + text;
+  return ansi.fg.orange("⚙ tool") + ansi.fg.comment(" · ") + ansi.fg.orange(text);
 }
 
 export function styleReasoning(text: string): string {
   return (
-    ansi.fg.purple(ansi.italic("think")) +
-    ansi.fg.comment(" › ") +
-    ansi.fg.comment(text)
+    "  " +
+    ansi.fg.purple(ansi.italic(ansi.dim("think"))) +
+    "\n  " +
+    ansi.fg.purple(ansi.italic(ansi.dim(text)))
   );
 }
 
 export function stylePermission(text: string): string {
-  return ansi.fg.yellow(ansi.bold("perm")) + ansi.fg.comment(" › ") + text;
+  return ansi.fg.yellow(ansi.bold("perm")) + ansi.fg.comment(" · ") + text;
 }
