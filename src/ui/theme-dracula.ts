@@ -459,3 +459,73 @@ export function styleReasoning(text: string): string {
 export function stylePermission(text: string): string {
   return ansi.fg.yellow(ansi.bold("perm")) + ansi.fg.comment(" · ") + text;
 }
+
+// ── Collapsible tool / think chrome ─────────────────────────────────
+
+/** Compact one-line collapsed tool: ▶ ⚙ tool · Bash · ls -la · (N lines) · /expand */
+export function styleToolCollapsed(text: string): string {
+  // Lazy import avoided — callers pass already-summarized or raw; we re-parse lightly.
+  const parts = text.split("\n");
+  const headerRaw = parts[0] ?? "tool";
+  const bodyLines = parts.slice(1).filter((l) => l.length > 0);
+  const statusMatch = headerRaw.match(/^(.*?)\s*\[([^\]]+)\]\s*(?:—\s*(.*))?$/);
+  let name = headerRaw.trim();
+  let status: string | null = null;
+  let errorTail: string | null = null;
+  if (statusMatch) {
+    name = statusMatch[1].trim() || "tool";
+    status = statusMatch[2].trim();
+    errorTail = statusMatch[3]?.trim() || null;
+  }
+  const displayName = name.length ? name : "tool";
+  const preview =
+    bodyLines[0]?.replace(/\s+/g, " ").trim() ||
+    errorTail?.replace(/\s+/g, " ").trim() ||
+    "";
+  const short =
+    preview.length > 48 ? preview.slice(0, 45) + "…" : preview;
+  const n = bodyLines.length;
+  return (
+    ansi.fg.comment("▶") +
+    " " +
+    ansi.fg.orange("⚙") +
+    ansi.fg.comment(" tool · ") +
+    ansi.fg.orange(ansi.bold(displayName)) +
+    (status ? ansi.fg.comment(" · ") + ansi.fg.comment(status) : "") +
+    (short ? ansi.fg.comment(" · ") + ansi.fg.fg(short) : "") +
+    (n > 1
+      ? ansi.fg.comment(` · (${n} lines)`)
+      : "") +
+    ansi.fg.comment(" · /expand")
+  );
+}
+
+/** Collapsed think: ▶ think · preview… · (N chars) · /think-expand */
+export function styleThinkCollapsed(text: string): string {
+  const raw = text.replace(/\s+/g, " ").trim();
+  const n = raw.length;
+  const preview =
+    raw.length > 60 ? raw.slice(0, 59) + "…" : raw || "(empty)";
+  return (
+    "  " +
+    ansi.fg.comment("▶") +
+    " " +
+    ansi.fg.purple(ansi.italic(ansi.dim("think"))) +
+    ansi.fg.comment(" · ") +
+    ansi.fg.purple(ansi.italic(ansi.dim(preview))) +
+    (n > 0 ? ansi.fg.comment(` · (${n} chars)`) : "") +
+    ansi.fg.comment(" · /think-expand")
+  );
+}
+
+/** Expanded think with ▾ marker (full body). */
+export function styleThinkExpanded(text: string): string {
+  return (
+    "  " +
+    ansi.fg.comment("▾") +
+    " " +
+    ansi.fg.purple(ansi.italic(ansi.dim("think"))) +
+    "\n  " +
+    ansi.fg.purple(ansi.italic(ansi.dim(text)))
+  );
+}

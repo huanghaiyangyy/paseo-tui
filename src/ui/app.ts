@@ -30,6 +30,7 @@ import { restoreAgentAfterReconnect } from "../session/attach.js";
 import { HeaderBar, StatusFooter } from "./header.js";
 import { TimelineView } from "./timeline.js";
 import { editorTheme } from "./theme-dracula.js";
+import { formatUsageChips, readAgentUsage } from "./usage.js";
 
 export type AppOptions = {
   wsUrl: string;
@@ -65,6 +66,7 @@ export async function startApp(options: AppOptions): Promise<void> {
     unsubscribeStream: null,
     pendingPermissions: [],
     seenPermissionIds: new Set(),
+    usageLabel: null,
   };
 
   // Filled after helpers; referenced by ensureConnected/stop closures.
@@ -158,20 +160,35 @@ export async function startApp(options: AppOptions): Promise<void> {
     })();
   };
 
+  const syncUsageLabel = (): void => {
+    state.usageLabel = formatUsageChips(readAgentUsage(state.agent));
+  };
+
   const refreshChrome = (extra?: string | null): void => {
+    syncUsageLabel();
+    const collapseHint = timeline.hasCollapsedTools()
+      ? "▾tools /expand"
+      : timeline.hasCollapsedThinks()
+        ? "▾think /think-expand"
+        : null;
+    const extras = [extra ?? null, collapseHint].filter(
+      (x): x is string => !!x && x.length > 0,
+    );
+    const extraJoined = extras.length ? extras.join(" · ") : null;
     header.setChips({
       model: state.model,
       think: state.thinkLevel,
       agentId: state.agentId,
       conn: state.connectionLabel,
-      extra: extra ?? null,
+      extra: extraJoined,
     });
     footer.setParts({
       conn: state.connectionLabel,
       bound: state.agentId ? state.agentId.slice(0, 8) : "unbound",
       model: state.model,
       think: state.thinkLevel,
-      extra: extra ?? null,
+      usage: state.usageLabel,
+      extra: extraJoined,
     });
     tui.requestRender();
   };
@@ -433,7 +450,7 @@ export async function startApp(options: AppOptions): Promise<void> {
     } else if (options.runImport) {
       await dispatchSlash(ctx, "/import");
     } else {
-      timeline.appendSystem("tip · /bind  /new  /import  /model  /think  /help");
+      timeline.appendSystem("tip · /bind  /new  /expand  /collapse  /think-expand  /help");
       state.unboundTipShown = true;
     }
     setStatus(statusLine(ctx));

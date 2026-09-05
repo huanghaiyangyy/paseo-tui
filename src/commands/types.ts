@@ -18,6 +18,13 @@ export type TimelineAppender = {
   appendToolResult?: (text: string, ok?: boolean) => void;
   appendReasoning?: (text: string) => void;
   appendPermission?: (text: string) => void;
+  /** Collapsible tool/think controls (TimelineView). */
+  expandLastTool?: () => boolean;
+  collapseLastTool?: () => boolean;
+  expandLastThink?: () => boolean;
+  collapseLastThink?: () => boolean;
+  hasCollapsedTools?: () => boolean;
+  hasCollapsedThinks?: () => boolean;
 };
 
 export type SessionState = {
@@ -42,6 +49,8 @@ export type SessionState = {
   unsubscribeStream: (() => void) | null;
   pendingPermissions: AgentPermissionRequest[];
   seenPermissionIds: Set<string>;
+  /** Last formatted usage chip string (↑in ↓out · $ · ctx%). */
+  usageLabel: string | null;
 };
 
 export type CommandContext = {

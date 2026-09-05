@@ -3,6 +3,8 @@ import { describe, it } from "node:test";
 import {
   highlightCode,
   styleToolBlock,
+  styleToolCollapsed,
+  styleThinkCollapsed,
   markdownTheme,
 } from "./theme-dracula.js";
 
@@ -50,5 +52,22 @@ describe("styleToolBlock", () => {
     assert.ok(block.includes("Bash") || block.includes("\u2699"));
     assert.ok(block.includes("ls -la"));
     assert.ok(ANSI_RE.test(block));
+  });
+});
+
+describe("collapsed chrome", () => {
+  it("styleToolCollapsed is a one-liner with expand hint", () => {
+    const line = styleToolCollapsed("Bash [running]\nls -la\na\nb\nc");
+    assert.ok(line.includes("\u25b6"));
+    assert.ok(line.includes("/expand"));
+    assert.equal(line.includes("\n"), false);
+    assert.ok(ANSI_RE.test(line));
+  });
+
+  it("styleThinkCollapsed shows preview and think-expand", () => {
+    const line = styleThinkCollapsed("x".repeat(200));
+    assert.ok(line.includes("think"));
+    assert.ok(line.includes("/think-expand"));
+    assert.ok(ANSI_RE.test(line));
   });
 });

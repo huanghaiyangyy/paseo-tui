@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.2.5 – 2026-09-05
+
+### P0 — collapsible tools + usage footer
+
+- **Collapsible tool blocks**: long tools (body > 2 lines) render as a compact
+  one-liner `▶ ⚙ tool · Name · preview · (N lines) · /expand`; short tools keep
+  the Codex-style box. `/expand` / `/collapse` toggle the last tool.
+- **Token / cost footer**: reads `agent.lastUsage` after turns and on subscribe
+  updates; right-side chips `↑in ↓out · $cost · ctx%` when present (graceful when null).
+- Footer hint `▾tools /expand` when any tool is collapsed.
+
+### P1 — streaming highlight + think collapse
+
+- **Streaming highlight**: `@earendil-works/pi-tui` 0.85 has no
+  `createHighlightStream`; mid-stream Text promotes to Markdown early once
+  fenced blocks look complete, then `setText` keeps highlighting as lines finish.
+- **Think collapse**: reasoning defaults collapsed when ≥120 chars
+  (`▶ think · preview… · (N chars) · /think-expand`); short thinks stay open.
+  `/think-expand` expands last; `/thinking` toggles.
+- Help lists the new slash commands. Unit tests for collapse helpers + usage
+  formatting. Demo: `/workspace/apps/shots/ui-p0p1.png`.
+
+
 ## 0.2.4 – 2026-09-05
 
 ### Markdown / code chrome (Pi · Codex feel)

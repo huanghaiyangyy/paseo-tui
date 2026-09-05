@@ -694,6 +694,60 @@ const quitCommand: SlashCommandDef = {
   },
 };
 
+
+const expandCommand: SlashCommandDef = {
+  name: "expand",
+  description: "Expand the last collapsed tool block",
+  run(ctx) {
+    const ok = ctx.timeline.expandLastTool?.() ?? false;
+    if (ok) {
+      ctx.timeline.appendSystem("Expanded last tool block.");
+    } else {
+      ctx.timeline.appendSystem("No collapsed tool to expand. (Long tools auto-collapse; /collapse to fold.)");
+    }
+  },
+};
+
+const collapseCommand: SlashCommandDef = {
+  name: "collapse",
+  description: "Collapse the last expanded tool block",
+  run(ctx) {
+    const ok = ctx.timeline.collapseLastTool?.() ?? false;
+    if (ok) {
+      ctx.timeline.appendSystem("Collapsed last tool block.");
+    } else {
+      ctx.timeline.appendSystem("No expanded tool to collapse.");
+    }
+  },
+};
+
+const thinkExpandCommand: SlashCommandDef = {
+  name: "think-expand",
+  description: "Expand the last collapsed think/reasoning block",
+  run(ctx) {
+    const ok = ctx.timeline.expandLastThink?.() ?? false;
+    if (ok) {
+      ctx.timeline.appendSystem("Expanded last think block.");
+    } else {
+      ctx.timeline.appendSystem("No collapsed think block. Short thinks stay open; long ones collapse.");
+    }
+  },
+};
+
+const thinkingCommand: SlashCommandDef = {
+  name: "thinking",
+  description: "Toggle expand/collapse on the last think block",
+  run(ctx) {
+    if (ctx.timeline.hasCollapsedThinks?.()) {
+      const ok = ctx.timeline.expandLastThink?.() ?? false;
+      ctx.timeline.appendSystem(ok ? "Expanded last think block." : "Nothing to expand.");
+      return;
+    }
+    const ok = ctx.timeline.collapseLastThink?.() ?? false;
+    ctx.timeline.appendSystem(ok ? "Collapsed last think block." : "No think block to toggle.");
+  },
+};
+
 export const COMMANDS: SlashCommandDef[] = [
   helpCommand,
   bindCommand,
@@ -702,6 +756,10 @@ export const COMMANDS: SlashCommandDef[] = [
   importCommand,
   modelCommand,
   thinkCommand,
+  thinkingCommand,
+  thinkExpandCommand,
+  expandCommand,
+  collapseCommand,
   allowCommand,
   denyCommand,
   permsCommand,

@@ -27,6 +27,7 @@ function mockCtx(partial?: Partial<SessionState>): CommandContext {
     unsubscribeStream: null,
     pendingPermissions: [],
     seenPermissionIds: new Set(),
+    usageLabel: null,
     ...partial,
   };
   return {
@@ -65,6 +66,10 @@ describe("command registry", () => {
       "import",
       "model",
       "think",
+      "thinking",
+      "think-expand",
+      "expand",
+      "collapse",
       "allow",
       "deny",
       "perms",

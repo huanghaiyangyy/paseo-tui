@@ -81,11 +81,13 @@ export type StatusParts = {
   bound?: string | null;
   model?: string | null;
   think?: string | null;
+  /** Token/cost chips: ↑in ↓out · $ · ctx% */
+  usage?: string | null;
   extra?: string | null;
 };
 
 /**
- * Two-tone footer: left `conn · bound/id`, right `model · think`.
+ * Two-tone footer: left `conn · bound/id`, right `usage · model · think`.
  */
 export class StatusFooter implements Component {
   private parts: StatusParts = {};
@@ -120,6 +122,7 @@ export class StatusFooter implements Component {
       this.parts.extra ? ansi.fg.yellow(this.parts.extra) : null,
     ]);
     const right = joinChips([
+      this.parts.usage ? ansi.fg.comment(this.parts.usage) : null,
       this.parts.model
         ? chip("model", shortModelName(this.parts.model) ?? this.parts.model, ansi.fg.cyan)
         : null,
