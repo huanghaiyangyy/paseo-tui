@@ -1,6 +1,6 @@
 {
   "name": "paseo-tui",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Ghostty-first terminal TUI for a single Paseo agent session",
   "type": "module",
   "engines": {
@@ -15,7 +15,7 @@
     "start": "node dist/main.js",
     "dev": "tsx src/main.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test src/resolve-ws-url.test.ts src/client/reconnect.test.ts src/client/paseo-app-version.test.ts src/commands/registry.test.ts src/session/stream.test.ts"
+    "test": "tsx --test src/resolve-ws-url.test.ts src/client/reconnect.test.ts src/client/paseo-app-version.test.ts src/commands/registry.test.ts src/session/stream.test.ts src/ui/theme-dracula.test.ts"
   },
   "keywords": [
     "paseo",
@@ -27,7 +27,8 @@
   "license": "MIT",
   "dependencies": {
     "@earendil-works/pi-tui": "0.85.0",
-    "@getpaseo/client": "0.7.2"
+    "@getpaseo/client": "0.7.2",
+    "highlight.js": "11.11.1"
   },
   "devDependencies": {
     "@types/node": "24.3.1",

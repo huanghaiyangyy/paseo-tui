@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.4 – 2026-09-05
+
+### Markdown / code chrome (Pi · Codex feel)
+
+- **Syntax highlighting**: `markdownTheme.highlightCode` via `highlight.js` with
+  Dracula-ish ANSI token colors (keyword pink, string yellow, comment muted,
+  number orange, …). Unknown langs still soft-style through `codeBlock`.
+- **Code / quote blocks**: stronger `codeBlockBorder` (muted ``` + pink lang tag);
+  `codeBlockIndent` uses a muted `│ `; quote borders more visible; pink H1/H2.
+- **Tool blocks**: Codex-like unicode box (`╭─ ⚙ tool · Name ──` / `│` / `╰──`);
+  `timeline.appendTool` uses `styleToolBlock`; best-effort `appendToolResult`
+  for completed/failed statuses; stream previews tool input when present.
+- Demo shot: `/workspace/apps/shots/ui-blocks-md.png`.
+
 ## 0.2.3 – 2026-09-05
 
 ### UI polish (Pi / Codex-like chrome)

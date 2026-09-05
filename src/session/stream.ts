@@ -18,6 +18,47 @@ function summarizeTool(item: {
   return `${item.name} [${item.status}]${err}`;
 }
 
+/** Best-effort preview of tool input for the bordered tool body. */
+export function formatToolInputPreview(detail: unknown): string | null {
+  if (detail == null || typeof detail !== "object") return null;
+  const d = detail as Record<string, unknown>;
+  const input = d.input;
+  if (input == null) return null;
+  if (typeof input === "string") {
+    const t = input.trim();
+    return t.length ? t : null;
+  }
+  if (typeof input !== "object") {
+    return String(input);
+  }
+  const obj = input as Record<string, unknown>;
+  for (const key of [
+    "command",
+    "cmd",
+    "script",
+    "code",
+    "query",
+    "path",
+    "file",
+    "pattern",
+    "url",
+    "text",
+    "content",
+  ]) {
+    const v = obj[key];
+    if (typeof v === "string" && v.trim()) {
+      return v.trim();
+    }
+  }
+  try {
+    const json = JSON.stringify(obj);
+    if (!json || json === "{}") return null;
+    return json.length > 160 ? json.slice(0, 157) + "…" : json;
+  } catch {
+    return null;
+  }
+}
+
 export function formatPermissionBrief(req: AgentPermissionRequest): string {
   const title = req.title?.trim() || req.name;
   const kind = req.kind ? ` (${req.kind})` : "";
@@ -31,6 +72,43 @@ function printPermission(timeline: TimelineAppender, req: AgentPermissionRequest
     timeline.appendPermission(line);
   } else {
     timeline.appendSystem(`permission › ${line}`);
+  }
+}
+
+function emitTool(
+  timeline: TimelineAppender,
+  item: Record<string, unknown>,
+): void {
+  const name = typeof item.name === "string" ? item.name : "tool";
+  const status = typeof item.status === "string" ? item.status : "?";
+  const header = summarizeTool({
+    name,
+    status,
+    error: item.error,
+  });
+  const preview = formatToolInputPreview(item.detail);
+  const text = preview ? `${header}\n${preview}` : header;
+
+  const failed = status === "failed" || status === "error" || status === "errored";
+  const completed =
+    status === "completed" ||
+    status === "success" ||
+    status === "succeeded" ||
+    status === "done";
+
+  if (
+    (failed || completed) &&
+    has(timeline, "appendToolResult") &&
+    timeline.appendToolResult
+  ) {
+    timeline.appendToolResult(text, !failed);
+    return;
+  }
+
+  if (has(timeline, "appendTool") && timeline.appendTool) {
+    timeline.appendTool(text);
+  } else {
+    timeline.appendSystem(`tool › ${text}`);
   }
 }
 
@@ -78,18 +156,7 @@ export function handleAgentStream(
           break;
         }
         case "tool_call": {
-          const name = typeof item.name === "string" ? item.name : "tool";
-          const status = typeof item.status === "string" ? item.status : "?";
-          const line = summarizeTool({
-            name,
-            status,
-            error: item.error,
-          });
-          if (has(timeline, "appendTool") && timeline.appendTool) {
-            timeline.appendTool(line);
-          } else {
-            timeline.appendSystem(`tool › ${line}`);
-          }
+          emitTool(timeline, item);
           break;
         }
         case "error": {

@@ -14,7 +14,8 @@ import {
   stylePermission,
   styleReasoning,
   styleSystem,
-  styleTool,
+  styleToolBlock,
+  styleToolResult,
   styleUser,
 } from "./theme-dracula.js";
 import type { TimelineAppender } from "../commands/types.js";
@@ -162,7 +163,14 @@ export class TimelineView implements TimelineAppender {
 
   appendTool(text: string): void {
     this.noteGroup("other");
-    this.container.addChild(new Text(styleTool(text), 0, 0));
+    this.container.addChild(new Text(styleToolBlock(text), 0, 0));
+    this.requestRender();
+  }
+
+  /** Best-effort success/fail tool result chrome when the stream provides it. */
+  appendToolResult(text: string, ok = true): void {
+    this.noteGroup("other");
+    this.container.addChild(new Text(styleToolResult(text, ok), 0, 0));
     this.requestRender();
   }
 

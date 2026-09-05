@@ -14,6 +14,8 @@ export type TimelineAppender = {
   didStreamAssistantThisTurn?: () => boolean;
   appendAgentDelta?: (text: string, messageId?: string) => void;
   appendTool?: (text: string) => void;
+  /** Optional success/fail styling when the stream reports a terminal tool status. */
+  appendToolResult?: (text: string, ok?: boolean) => void;
   appendReasoning?: (text: string) => void;
   appendPermission?: (text: string) => void;
 };
