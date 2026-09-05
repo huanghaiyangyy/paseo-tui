@@ -1,6 +1,6 @@
 {
   "name": "paseo-tui",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Ghostty-first terminal TUI for a single Paseo agent session",
   "type": "module",
   "engines": {
@@ -15,7 +15,7 @@
     "start": "node dist/main.js",
     "dev": "tsx src/main.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test src/resolve-ws-url.test.ts src/client/reconnect.test.ts src/commands/registry.test.ts src/session/stream.test.ts"
+    "test": "tsx --test src/resolve-ws-url.test.ts src/client/reconnect.test.ts src/client/paseo-app-version.test.ts src/commands/registry.test.ts src/session/stream.test.ts"
   },
   "keywords": [
     "paseo",

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.2 – 2026-09-05
+
+### Fix idle / grok-gateway agent bind
+
+- Advertise `appVersion` from package.json in the daemon `hello` handshake.
+  Without `appVersion >= 0.1.45`, the daemon only returns legacy providers
+  (`claude` / `codex` / `opencode`), so idle `grok-gateway` agents were invisible
+  to `fetchAgents` / `fetchAgent` / `--bind` / `/bind` even though `paseo ls` (which
+  sends a CLI version) listed them.
+- `listAgents` now uses `scope: "active"` with `page.limit: 100` (CLI-aligned).
+- `bindExistingAgent` resolves short id prefixes via the active list when needed.
+
+
 ## 0.2.1 – 2026-09-05
 
 ### Safe auto-reconnect (single session)

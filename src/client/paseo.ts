@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import { createPaseoApi, type PaseoClient, type PaseoAgentHandle, type PaseoAgentListResult } from "@getpaseo/client";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { reconnectOptions } from "./reconnect.js";
@@ -7,11 +8,36 @@ export type ConnectOptions = {
   password?: string;
   /** Override env; when omitted, PASEO_RECONNECT controls SDK reconnect. */
   reconnectEnabled?: boolean;
+  /** Override hello appVersion (tests). Defaults to package.json version. */
+  appVersion?: string;
 };
 
 export type PaseoConnection = {
   client: PaseoClient;
   daemon: DaemonClient;
+};
+
+const require = createRequire(import.meta.url);
+
+/** App version advertised in the daemon hello handshake. */
+export function resolveAppVersion(override?: string): string {
+  if (override && override.trim().length > 0) return override.trim();
+  try {
+    const pkg = require("../../package.json") as { version?: unknown };
+    if (typeof pkg.version === "string" && pkg.version.trim().length > 0) {
+      return pkg.version.trim();
+    }
+  } catch {
+    // fall through
+  }
+  // Daemon hides non-legacy providers (e.g. grok-gateway) unless appVersion >= 0.1.45.
+  return "0.1.45";
+}
+
+/** Default fetchAgents options: active workspaces, enough page size for picker. */
+export const DEFAULT_LIST_AGENTS_OPTIONS = {
+  scope: "active" as const,
+  page: { limit: 100 },
 };
 
 function connectTimeoutMs(): number {
@@ -30,6 +56,9 @@ function buildDaemon(options: ConnectOptions): DaemonClient {
     url: options.url,
     clientId: `paseo-tui-${process.pid}-${Date.now()}`,
     clientType: "cli",
+    // Without appVersion >= 0.1.45 the daemon only surfaces legacy providers
+    // (claude/codex/opencode), so idle grok-gateway agents look "not found".
+    appVersion: resolveAppVersion(options.appVersion),
     password: options.password ?? process.env.PASEO_PASSWORD,
     connectTimeoutMs: connectTimeoutMs(),
     reconnect: {
@@ -67,7 +96,7 @@ export async function connectClient(options: ConnectOptions): Promise<PaseoClien
 }
 
 export async function listAgents(client: PaseoClient): Promise<PaseoAgentListResult> {
-  return client.agents.list();
+  return client.agents.list(DEFAULT_LIST_AGENTS_OPTIONS);
 }
 
 export async function createAgent(
@@ -101,9 +130,47 @@ export async function bindExistingAgent(
   client: PaseoClient,
   id: string,
 ): Promise<PaseoAgentHandle> {
-  const agent = refAgent(client, id);
-  await agent.refresh();
-  return agent;
+  const trimmed = id.trim();
+  if (!trimmed) {
+    throw new Error("Agent id cannot be empty");
+  }
+
+  // Prefer exact refresh; if that fails (short prefix / stale), resolve via list.
+  const agent = refAgent(client, trimmed);
+  try {
+    const result = await agent.refresh();
+    if (result?.agent) {
+      return agent;
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    // Fall through to list-based resolve for short ids / visibility race.
+    if (!/not found/i.test(message) && trimmed.length >= 32) {
+      throw err instanceof Error ? err : new Error(message);
+    }
+  }
+
+  const page = await listAgents(client);
+  const matches = page.entries
+    .map((e) => e.agent)
+    .filter((a) => a.id === trimmed || a.id.startsWith(trimmed));
+  if (matches.length === 1) {
+    const resolved = refAgent(client, matches[0]!.id);
+    const result = await resolved.refresh();
+    if (!result?.agent) {
+      throw new Error(`Agent not found: ${matches[0]!.id}`);
+    }
+    return resolved;
+  }
+  if (matches.length > 1) {
+    throw new Error(
+      `Agent identifier "${trimmed}" is ambiguous (${matches
+        .slice(0, 5)
+        .map((a) => a.id.slice(0, 8))
+        .join(", ")}${matches.length > 5 ? ", …" : ""})`,
+    );
+  }
+  throw new Error(`Agent not found: ${trimmed}`);
 }
 
 /** Map host[:port] or full ws URL to a daemon WebSocket URL. */
