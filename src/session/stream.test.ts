@@ -15,6 +15,7 @@ function captureTimeline() {
     requestRender: () => {},
     appendAgentDelta: (text) => lines.push({ kind: "agent", text }),
     appendTool: (text) => lines.push({ kind: "tool", text }),
+    appendToolResult: (text) => lines.push({ kind: "tool", text }),
     appendReasoning: (text) => lines.push({ kind: "reasoning", text }),
     appendPermission: (text) => lines.push({ kind: "perm", text }),
   };
@@ -52,7 +53,34 @@ describe("handleAgentStream", () => {
       },
     } as PaseoAgentStream);
     assert.equal(lines.at(-1)?.kind, "tool");
-    assert.match(lines.at(-1)!.text, /bash/);
+    assert.match(lines.at(-1)!.text, /bash/i);
+  });
+
+  it("renders canonical shell command instead of (no preview)", () => {
+    const { lines, timeline } = captureTimeline();
+    handleAgentStream(timeline, {
+      agentId: "a1",
+      event: {
+        type: "timeline",
+        provider: "grok",
+        item: {
+          type: "tool_call",
+          callId: "c2",
+          name: "execute",
+          status: "completed",
+          error: null,
+          detail: {
+            type: "shell",
+            command: "echo hi",
+            output: "hi\n",
+          },
+        },
+      },
+    } as PaseoAgentStream);
+    const text = lines.at(-1)!.text;
+    assert.match(text, /echo hi/);
+    assert.match(text, /hi/);
+    assert.doesNotMatch(text, /no preview/);
   });
 
   it("surfaces permission_requested", () => {

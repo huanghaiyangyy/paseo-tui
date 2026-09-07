@@ -6,16 +6,21 @@ import type { AgentPermissionRequest } from "@getpaseo/protocol/agent-types";
 export type TimelineAppender = {
   appendSystem: (text: string) => void;
   appendUser: (text: string) => void;
-  appendAgent: (text: string) => void;
+  appendAgent: (text: string, messageId?: string) => void;
   appendError: (text: string) => void;
   clear: () => void;
   requestRender: () => void;
+  beginBatch?: () => void;
+  endBatch?: () => void;
+  setStreamMergeMode?: (mode: "live" | "catchup") => void;
   beginLocalTurn?: (userText: string) => void;
   didStreamAssistantThisTurn?: () => boolean;
+  finalizeAgentStream?: () => void;
+  wasLocalUserEcho?: (text: string) => boolean;
   appendAgentDelta?: (text: string, messageId?: string) => void;
-  appendTool?: (text: string) => void;
+  appendTool?: (text: string, callId?: string) => void;
   /** Optional success/fail styling when the stream reports a terminal tool status. */
-  appendToolResult?: (text: string, ok?: boolean) => void;
+  appendToolResult?: (text: string, ok?: boolean, callId?: string) => void;
   appendReasoning?: (text: string) => void;
   appendPermission?: (text: string) => void;
   /** Collapsible tool/think controls (TimelineView). */
@@ -32,6 +37,8 @@ export type SessionState = {
   daemon: DaemonClient | null;
   agent: PaseoAgentHandle | null;
   agentId: string | null;
+  /** Bound agent display title (Paseo session name). */
+  title: string | null;
   model: string | null;
   thinkLevel: string | null;
   wsUrl: string;

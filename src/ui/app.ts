@@ -31,6 +31,11 @@ import { HeaderBar, StatusFooter } from "./header.js";
 import { TimelineView } from "./timeline.js";
 import { editorTheme } from "./theme-dracula.js";
 import { formatUsageChips, readAgentUsage } from "./usage.js";
+import {
+  formatBoundChip,
+  formatHeaderTitle,
+  formatSessionRef,
+} from "./format-session.js";
 
 export type AppOptions = {
   wsUrl: string;
@@ -53,6 +58,7 @@ export async function startApp(options: AppOptions): Promise<void> {
     daemon: null,
     agent: null,
     agentId: null,
+    title: null,
     model: defaultProvider,
     thinkLevel: null,
     wsUrl: options.wsUrl,
@@ -175,6 +181,7 @@ export async function startApp(options: AppOptions): Promise<void> {
       (x): x is string => !!x && x.length > 0,
     );
     const extraJoined = extras.length ? extras.join(" · ") : null;
+    header.setTitle(formatHeaderTitle(state.title, state.agentId));
     header.setChips({
       model: state.model,
       think: state.thinkLevel,
@@ -184,7 +191,7 @@ export async function startApp(options: AppOptions): Promise<void> {
     });
     footer.setParts({
       conn: state.connectionLabel,
-      bound: state.agentId ? state.agentId.slice(0, 8) : "unbound",
+      bound: formatBoundChip(state.agentId, state.title),
       model: state.model,
       think: state.thinkLevel,
       usage: state.usageLabel,
@@ -444,13 +451,15 @@ export async function startApp(options: AppOptions): Promise<void> {
   try {
     if (options.bindId) {
       await ctx.bindAgent(options.bindId);
-      timeline.appendSystem(`Bound to agent ${options.bindId}`);
+      timeline.appendSystem(
+        `Bound to ${formatSessionRef(state.agentId ?? options.bindId, state.title)}`,
+      );
     } else if (options.createNew) {
       await dispatchSlash(ctx, `/new ${state.defaultProvider}`);
     } else if (options.runImport) {
       await dispatchSlash(ctx, "/import");
     } else {
-      timeline.appendSystem("tip · /bind  /new  /expand  /collapse  /think-expand  /help");
+      timeline.appendSystem("tip · /bind  /new  /rename  /expand  /collapse  /help");
       state.unboundTipShown = true;
     }
     setStatus(statusLine(ctx));

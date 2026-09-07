@@ -1,6 +1,17 @@
 import type { CommandContext, SlashCommandDef } from "./types.js";
 import { createAgent, listAgents, bindExistingAgent } from "../client/paseo.js";
 import { showSelectList, type PickerItem } from "../ui/picker.js";
+import { showTabbedSelectList } from "../ui/tabbed-picker.js";
+import { MAX_EXPLICIT_AGENT_TITLE_CHARS } from "@getpaseo/protocol/agent-title-limits";
+import {
+  buildAgentTabs,
+  buildImportTabs,
+  formatAgentPickerItem,
+  formatBoundChip,
+  formatImportPickerItem,
+  formatSessionRef,
+  normalizeSessionTitle,
+} from "../ui/format-session.js";
 import {
   attachAgent,
   clearAgentBinding,
@@ -11,6 +22,22 @@ import { formatPermissionBrief } from "../session/stream.js";
 
 function splitArgs(args: string): string {
   return args.trim();
+}
+
+function unquoteName(raw: string): string {
+  const s = raw.trim();
+  if (s.length >= 2) {
+    const a = s[0];
+    const b = s[s.length - 1];
+    if ((a === '"' && b === '"') || (a === "'" && b === "'")) {
+      return s.slice(1, -1).trim();
+    }
+  }
+  return s;
+}
+
+function boundRef(ctx: CommandContext): string {
+  return formatSessionRef(ctx.state.agentId, ctx.state.title);
 }
 
 function providerModelLabel(provider: string, modelId: string): string {
@@ -222,7 +249,7 @@ async function createAndBind(
     thinkingOptionId,
   });
   await attachAgent(ctx, agent);
-  ctx.timeline.appendSystem(`Created and bound agent ${agent.id}`);
+  ctx.timeline.appendSystem(`Created and bound ${boundRef(ctx)}`);
 }
 
 async function pickAndBindAgent(ctx: CommandContext): Promise<void> {
@@ -232,24 +259,21 @@ async function pickAndBindAgent(ctx: CommandContext): Promise<void> {
     ctx.timeline.appendSystem("No agents found. Use /new to create one.");
     return;
   }
-  const items: PickerItem[] = page.entries.map((entry) => {
-    const a = entry.agent;
-    const title = a.title ? ` "${a.title}"` : "";
-    return {
-      value: a.id,
-      label: `${a.id.slice(0, 12)}… [${a.status}] ${a.provider}${a.model ? "/" + a.model : ""}${title}`,
-      description: a.cwd,
-    };
-  });
-  ctx.timeline.appendSystem("Select an agent to bind (Esc to cancel)…");
+  const items = page.entries.map((entry) => formatAgentPickerItem(entry.agent));
+  const tabs = buildAgentTabs(items);
+  ctx.timeline.appendSystem(
+    `Select an agent to bind (${page.entries.length} active). Tab/←→ filter · Esc cancel.`,
+  );
   ctx.timeline.requestRender();
-  const chosen = await showSelectList(ctx.tui, items);
+  const chosen = await showTabbedSelectList(ctx.tui, items, tabs, {
+    hint: "Tab/←→ or 1-9 switch tabs · Enter bind · Esc cancel",
+  });
   if (!chosen) {
     ctx.timeline.appendSystem("Cancelled.");
     return;
   }
   await ctx.bindAgent(chosen);
-  ctx.timeline.appendSystem(`Bound to agent ${chosen}`);
+  ctx.timeline.appendSystem(`Bound to ${boundRef(ctx)}`);
 }
 
 const helpCommand: SlashCommandDef = {
@@ -266,13 +290,13 @@ const helpCommand: SlashCommandDef = {
 
 const bindCommand: SlashCommandDef = {
   name: "bind",
-  description: "SelectList of agents, or bind by id",
+  description: "Tabbed agent picker (title/status/model), or bind by id",
   argumentHint: "[id]",
   async run(ctx, args) {
     const id = splitArgs(args);
     if (id) {
       await ctx.bindAgent(id);
-      ctx.timeline.appendSystem(`Bound to agent ${id}`);
+      ctx.timeline.appendSystem(`Bound to ${boundRef(ctx)}`);
       return;
     }
     await pickAndBindAgent(ctx);
@@ -287,7 +311,7 @@ const switchCommand: SlashCommandDef = {
     const id = splitArgs(args);
     if (id) {
       await ctx.bindAgent(id);
-      ctx.timeline.appendSystem(`Switched to agent ${id}`);
+      ctx.timeline.appendSystem(`Switched to ${boundRef(ctx)}`);
       return;
     }
     await pickAndBindAgent(ctx);
@@ -312,14 +336,15 @@ const newCommand: SlashCommandDef = {
 
 const importCommand: SlashCommandDef = {
   name: "import",
-  description: "Import a recent provider session for this cwd",
+  description: "Import a provider session (tabs by provider / this folder)",
   async run(ctx) {
     const daemon = await ctx.ensureDaemon();
     const client = await ctx.ensureClient();
     ctx.timeline.appendSystem("Fetching recent provider sessions…");
+    // Omit cwd so Grok/Codex/Pi sessions from other folders are listed;
+    // the picker "This folder" tab filters to process.cwd().
     const payload = await daemon.fetchRecentProviderSessions({
-      cwd: process.cwd(),
-      limit: 50,
+      limit: 80,
     });
     const entries = payload.entries ?? [];
     if (entries.length === 0) {
@@ -329,36 +354,38 @@ const importCommand: SlashCommandDef = {
           ? ` (${filtered} already imported filtered out)`
           : "";
       ctx.timeline.appendSystem(
-        `No external provider sessions found for this cwd${extra}.\n` +
+        `No external provider sessions found${extra}.\n` +
           "Providers may not expose recent sessions, or none exist yet.",
       );
       return;
     }
 
-    const items: PickerItem[] = entries.map((entry, index) => {
-      const title =
-        entry.title?.trim() ||
-        entry.lastPromptPreview?.trim() ||
-        entry.firstPromptPreview?.trim() ||
-        "(untitled)";
-      const when = entry.lastActivityAt
-        ? new Date(entry.lastActivityAt).toLocaleString()
+    const here = process.cwd();
+    const items = entries.map((entry) => formatImportPickerItem(entry, here));
+    const tabs = buildImportTabs(items);
+    const filtered = payload.filteredAlreadyImportedCount;
+    const extra =
+      typeof filtered === "number" && filtered > 0
+        ? ` · ${filtered} already imported hidden`
         : "";
-      return {
-        value: String(index),
-        label: `${entry.providerLabel || entry.providerId}: ${title.slice(0, 60)}`,
-        description: [entry.cwd, when].filter(Boolean).join(" · "),
-      };
-    });
-
-    ctx.timeline.appendSystem("Select a session to import (Esc to cancel)…");
+    ctx.timeline.appendSystem(
+      `Select a session to import (${entries.length} found${extra}). Tab/←→ by provider.`,
+    );
     ctx.timeline.requestRender();
-    const chosen = await showSelectList(ctx.tui, items);
+    const chosen = await showTabbedSelectList(ctx.tui, items, tabs, {
+      hint: "Tab/←→ or 1-9 switch All · This folder · provider · Enter import · Esc cancel",
+    });
     if (chosen == null) {
       ctx.timeline.appendSystem("Import cancelled.");
       return;
     }
-    const entry = entries[Number.parseInt(chosen, 10)];
+    const sep = chosen.indexOf("::");
+    const providerId = sep === -1 ? "" : chosen.slice(0, sep);
+    const handleId = sep === -1 ? chosen : chosen.slice(sep + 2);
+    const entry = entries.find(
+      (row) =>
+        row.providerId === providerId && row.providerHandleId === handleId,
+    );
     if (!entry) {
       ctx.timeline.appendError("Invalid selection.");
       return;
@@ -380,7 +407,7 @@ const importCommand: SlashCommandDef = {
     const agent = client.agents.ref(agentId);
     await agent.refresh();
     await attachAgent(ctx, agent);
-    ctx.timeline.appendSystem(`Imported and bound agent ${agent.id}`);
+    ctx.timeline.appendSystem(`Imported and bound ${boundRef(ctx)}`);
   },
 };
 
@@ -654,6 +681,45 @@ const permsCommand: SlashCommandDef = {
   },
 };
 
+const renameCommand: SlashCommandDef = {
+  name: "rename",
+  description: "Show or set the bound session name",
+  argumentHint: "[name]",
+  async run(ctx, args) {
+    if (!ctx.state.agentId || !ctx.state.agent) {
+      ctx.timeline.appendSystem("No agent bound. Use /bind or /new first.");
+      return;
+    }
+
+    const name = unquoteName(args);
+    if (!name) {
+      const current = ctx.state.title ?? "(untitled)";
+      ctx.timeline.appendSystem(
+        `Session name: ${current}\nPass /rename <name> to change it.`,
+      );
+      return;
+    }
+    if (name.length > MAX_EXPLICIT_AGENT_TITLE_CHARS) {
+      ctx.timeline.appendError(
+        `Name too long (${name.length} chars; max ${MAX_EXPLICIT_AGENT_TITLE_CHARS}).`,
+      );
+      return;
+    }
+
+    const daemon = await ctx.ensureDaemon();
+    await daemon.updateAgent(ctx.state.agentId, { name });
+    try {
+      await ctx.state.agent.refresh();
+    } catch {
+      // refresh best-effort; still apply the name we sent
+    }
+    const snapTitle = normalizeSessionTitle(ctx.state.agent.current()?.title);
+    ctx.state.title = snapTitle ?? name;
+    ctx.setStatus(ctx.statusLine());
+    ctx.timeline.appendSystem(`Session renamed to ${ctx.state.title}`);
+  },
+};
+
 const cwdCommand: SlashCommandDef = {
   name: "cwd",
   description: "Show current working directory",
@@ -674,14 +740,14 @@ const detachCommand: SlashCommandDef = {
       ctx.timeline.appendSystem("Not bound to an agent.");
       return;
     }
-    const id = ctx.state.agentId;
+    const ref = boundRef(ctx);
     try {
       await ctx.state.agent.detach();
     } catch {
       // Local unbind still proceeds if daemon detach fails / is unavailable.
     }
     ctx.unbindAgent();
-    ctx.timeline.appendSystem(`Detached from agent ${id ?? "(unknown)"}`);
+    ctx.timeline.appendSystem(`Detached from ${ref}`);
   },
 };
 
@@ -764,6 +830,7 @@ export const COMMANDS: SlashCommandDef[] = [
   denyCommand,
   permsCommand,
   cwdCommand,
+  renameCommand,
   detachCommand,
   quitCommand,
 ];
@@ -808,7 +875,7 @@ export function statusLine(ctx: CommandContext): string {
     ? `conn:${ctx.state.connectionLabel}`
     : "conn:?";
   const bound = ctx.state.agentId
-    ? `bound:${ctx.state.agentId.slice(0, 8)}`
+    ? `bound:${formatBoundChip(ctx.state.agentId, ctx.state.title, 32)}`
     : "unbound";
   const model = ctx.state.model ? ` model:${ctx.state.model}` : "";
   const think = ctx.state.thinkLevel ? ` think:${ctx.state.thinkLevel}` : "";

@@ -12,7 +12,7 @@ open another Ghostty (or terminal) window and run `paseo-tui` again.
 
 - Bind an existing agent (SelectList or id), create a new agent (interactive model picker), or import a provider session
 - Live streaming timeline (assistant deltas, tools, reasoning, errors, permissions)
-- Slash commands for help, bind, switch, new, import, model, think, allow, deny, perms, cwd, detach, quit
+- Slash commands for help, bind, switch, new, import, model, think, rename, allow, deny, perms, cwd, detach, quit
 - Dracula Transparent styling with ANSI only (no opaque full-screen backgrounds)
 - `/model` applies to the live agent via daemon `setAgentModel` when bound
 - `/think` stores a local preference, opens a picker when bound, and tries `setAgentThinkingOption`; also passes `thinkingOptionId` on `/new`
@@ -100,16 +100,21 @@ With no flags, the TUI starts unbound and tips `/bind` `/new` `/import`.
 ## Slash commands
 
 - `help` — list commands
-- `bind [id]` – SelectList of agents via SDK, or bind by id
+- `bind [id]` – tabbed agent picker (title/status/model/think/cwd), or bind by id
 - `new [provider/model]` – with no arg, opens a SelectList of ready `provider/model` entries; with arg, creates directly
-- `import` – fetch recent provider sessions for this cwd, pick one, `importAgent`, bind
+- `import` – tabbed picker of recent provider sessions (All / this folder / provider)
 - `model [id]` – show current; with no arg and bound, optionally pick a model for the current provider; with arg, call `setAgentModel` on the live agent
 - `think [level]` – picker when bound / no args; else set thinkingOptionId
 - `allow` / `deny` / `perms` – respondToPermission helpers
 - `switch [id]` – rebind another agent
 - `cwd` – show process and agent cwd
+- `rename [name]` – show the bound session title, or set it via daemon `updateAgent`
 - `detach` – unbind without archiving
 - `quit` – stop TUI and exit (cancels reconnect)
+
+Bound session title is shown in the header, footer `bound:` chip, `/bind`
+picker rows, and bind/switch/new/import messages. Untitled sessions fall
+back to a short agent id.
 
 ## Tests / smoke
 

@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.2.8 – 2026-09-07
+
+### Session rename + title chrome
+
+- **`/rename [name]`**: show the bound agent's display title, or set it through
+  daemon `updateAgent({ name })` (same RPC as `paseo agent update --name`).
+  Quotes around the name are optional; titles over 200 chars are rejected.
+- **Live title**: header uses the session name when bound (`(untitled <id>)`
+  if missing); footer `bound:` chip and `statusLine` prefer the title over
+  the short agent id. Bind / switch / new / import / detach messages include
+  `Title (shortId)`.
+- Agent snapshots (bind + `agent_update` upserts) keep `state.title` in sync
+  when Paseo auto-names or another client renames the session.
+
+## 0.2.7 – 2026-09-05
+
+### Bind / import pickers
+
+- **`/bind` `/switch`**: list rows lead with session title, then status,
+  `provider/model`, think level, short id, relative time, cwd, labels,
+  and attention/perms. Tabs: All · running/idle/… · provider (when more
+  than one). Tab / ← → / 1-9 switch tabs.
+- **`/import`**: stop filtering to `process.cwd()` (that hid Grok/Codex/Pi
+  sessions in other folders). Tabs: All · This folder · Grok · Codex · …
+  Each row shows title, provider, time, cwd, and prompt preview.
+
+## 0.2.6 – 2026-09-05
+
+### Fix — session load jank + incomplete tool/think
+
+Live `agent_stream` items are **deltas** (often 1–5 chars of think, many
+assistant chunks, running+completed tools). 0.2.5 treated each as a new
+widget and only read `detail.input`, so bind felt frozen and the timeline
+showed `(no preview)` / fragmented think.
+
+- **In-place merge**: consecutive reasoning concatenates; assistant updates
+  by `messageId` (delta or snapshot); tools upsert by `callId`.
+- **Canonical tool preview**: `shell.command`, `read/edit.filePath`, output
+  clipping, `metadata.title` fallback. No more empty `(no preview)` boxes
+  for grok execute/read/edit.
+- **Projected history on bind**: `timeline.refetch({ projection: "projected" })`
+  paints merged history in one batch; live events are buffered then catchup-
+  merged so we don't double-print the race window.
+- **Render**: batch during hydrate; don't `setStatus` on every token;
+  keep streaming assistant as Text until turn finalize (no highlight.js
+  per token). Reconnect skips re-hydrate so the view isn't wiped.
+
 ## 0.2.5 – 2026-09-05
 
 ### P0 — collapsible tools + usage footer

@@ -21,11 +21,14 @@ import {
   styleUser,
 } from "./theme-dracula.js";
 import {
-  hasCompleteFenceBlocks,
   shouldAutoCollapseThink,
   shouldAutoCollapseTool,
 } from "./collapse.js";
 import type { TimelineAppender } from "../commands/types.js";
+import {
+  mergeStreamText,
+  type StreamMergeMode,
+} from "../session/merge-text.js";
 
 type GroupRole = "user" | "agent" | "other";
 
@@ -44,32 +47,58 @@ type CollapsibleSlot = {
   body: Text;
   raw: string;
   expanded: boolean;
+  userExpanded: boolean;
+  callId: string | null;
+  /** null = running tool box; true/false = result chrome. */
+  toolOk: boolean | null;
 };
 
 export class TimelineView implements TimelineAppender {
   readonly container = new Container();
   private requestRenderFn: () => void = () => {};
   private agentStream: AgentStreamSlot | null = null;
+  private readonly agentByMessageId = new Map<string, AgentStreamSlot>();
   private lastLocalUserText: string | null = null;
   private streamedAssistantThisTurn = false;
   private lastGroupRole: GroupRole | null = null;
   private collapsibles: CollapsibleSlot[] = [];
+  private thinkSlot: CollapsibleSlot | null = null;
+  private readonly toolsByCallId = new Map<string, CollapsibleSlot>();
+  private batchDepth = 0;
+  private mergeMode: StreamMergeMode = "live";
 
   setRequestRender(fn: () => void): void {
     this.requestRenderFn = fn;
   }
 
   requestRender(): void {
+    if (this.batchDepth > 0) return;
     this.requestRenderFn();
+  }
+
+  beginBatch(): void {
+    this.batchDepth += 1;
+  }
+
+  endBatch(): void {
+    this.batchDepth = Math.max(0, this.batchDepth - 1);
+    if (this.batchDepth === 0) this.requestRenderFn();
+  }
+
+  setStreamMergeMode(mode: StreamMergeMode): void {
+    this.mergeMode = mode;
   }
 
   clear(): void {
     this.container.clear();
     this.agentStream = null;
+    this.agentByMessageId.clear();
     this.lastLocalUserText = null;
     this.streamedAssistantThisTurn = false;
     this.lastGroupRole = null;
     this.collapsibles = [];
+    this.thinkSlot = null;
+    this.toolsByCallId.clear();
     this.requestRender();
   }
 
@@ -77,6 +106,7 @@ export class TimelineView implements TimelineAppender {
   beginLocalTurn(userText: string): void {
     this.lastLocalUserText = userText;
     this.streamedAssistantThisTurn = false;
+    this.closeThink();
     this.finalizeAgentStream();
     this.agentStream = null;
   }
@@ -114,12 +144,12 @@ export class TimelineView implements TimelineAppender {
       const s = this.collapsibles[i];
       if (s.kind === "tool" && !s.expanded) {
         s.expanded = true;
-        s.body.setText(styleToolBlock(s.raw));
+        s.userExpanded = true;
+        this.paintCollapsible(s);
         this.requestRender();
         return true;
       }
     }
-    // If last tool is already expanded, still report false.
     return false;
   }
 
@@ -129,12 +159,12 @@ export class TimelineView implements TimelineAppender {
       const s = this.collapsibles[i];
       if (s.kind === "tool" && s.expanded) {
         s.expanded = false;
-        s.body.setText(styleToolCollapsed(s.raw));
+        s.userExpanded = false;
+        this.paintCollapsible(s);
         this.requestRender();
         return true;
       }
     }
-    // Force-collapse last tool even if already collapsed? no-op
     return false;
   }
 
@@ -143,7 +173,8 @@ export class TimelineView implements TimelineAppender {
       const s = this.collapsibles[i];
       if (s.kind === "think" && !s.expanded) {
         s.expanded = true;
-        s.body.setText(styleThinkExpanded(s.raw));
+        s.userExpanded = true;
+        this.paintCollapsible(s);
         this.requestRender();
         return true;
       }
@@ -156,7 +187,8 @@ export class TimelineView implements TimelineAppender {
       const s = this.collapsibles[i];
       if (s.kind === "think" && s.expanded) {
         s.expanded = false;
-        s.body.setText(styleThinkCollapsed(s.raw));
+        s.userExpanded = false;
+        this.paintCollapsible(s);
         this.requestRender();
         return true;
       }
@@ -171,58 +203,67 @@ export class TimelineView implements TimelineAppender {
   }
 
   appendUser(text: string): void {
+    this.closeThink();
     this.finalizeAgentStream();
     this.noteGroup("user");
     this.container.addChild(new Text(styleUser(text), 0, 0));
     this.requestRender();
   }
 
-  appendAgent(text: string): void {
+  appendAgent(text: string, messageId?: string): void {
+    this.closeThink();
     this.finalizeAgentStream();
     this.agentStream = null;
     this.noteGroup("agent");
-    this.container.addChild(this.buildAgentBlock(text, true));
+    const wrap = this.buildAgentBlock(text, true);
+    const body = wrap.children[1] as Text | Markdown;
+    const slot: AgentStreamSlot = {
+      wrap,
+      body,
+      raw: text,
+      messageId: messageId ?? null,
+      isMarkdown: true,
+    };
+    if (messageId) this.agentByMessageId.set(messageId, slot);
+    this.agentStream = slot;
+    this.container.addChild(wrap);
     this.requestRender();
   }
 
   /**
    * Append or update streaming assistant text. Same messageId (or continued
-   * growth without id) updates in place so deltas feel live.
-   * Mid-stream starts as Text; promotes to Markdown early when fenced blocks
-   * look complete (pi-tui 0.85 has no createHighlightStream).
+   * unnamed stream) updates in place. Incoming chunks may be deltas or snapshots.
+   * Stays as plain Text until finalizeAgentStream() so we don't re-parse Markdown
+   * / highlight.js on every token.
    */
   appendAgentDelta(text: string, messageId?: string): void {
     this.streamedAssistantThisTurn = true;
-    const slot = this.agentStream;
-    if (
-      slot &&
-      ((messageId && messageId === slot.messageId) ||
-        (!messageId &&
-          !slot.messageId &&
-          text.startsWith(slot.raw)))
-    ) {
-      slot.raw = text;
-      if (!slot.isMarkdown && hasCompleteFenceBlocks(text)) {
-        this.promoteAgentToMarkdown(slot);
-      } else {
-        slot.body.setText(text);
+    this.closeThink();
+    const slot = this.findAgentSlot(messageId);
+    if (slot) {
+      const merged = mergeStreamText(slot.raw, text, this.mergeMode);
+      if (merged !== slot.raw) {
+        slot.raw = merged;
+        slot.body.setText(merged);
       }
+      this.agentStream = slot;
       this.requestRender();
       return;
     }
 
     this.finalizeAgentStream();
     this.noteGroup("agent");
-    const asMd = hasCompleteFenceBlocks(text);
-    const wrap = this.buildAgentBlock(text, asMd);
+    const wrap = this.buildAgentBlock(text, false);
     const body = wrap.children[1] as Text | Markdown;
-    this.agentStream = {
+    const created: AgentStreamSlot = {
       wrap,
       body,
       raw: text,
       messageId: messageId ?? null,
-      isMarkdown: asMd,
+      isMarkdown: false,
     };
+    if (messageId) this.agentByMessageId.set(messageId, created);
+    this.agentStream = created;
     this.container.addChild(wrap);
     this.requestRender();
   }
@@ -239,63 +280,43 @@ export class TimelineView implements TimelineAppender {
     this.requestRender();
   }
 
-  appendTool(text: string): void {
-    this.noteGroup("other");
-    const expanded = !shouldAutoCollapseTool(text);
-    const painted = expanded
-      ? styleToolBlock(text)
-      : styleToolCollapsed(text);
-    const body = new Text(painted, 0, 0);
-    this.collapsibles.push({
-      kind: "tool",
-      body,
-      raw: text,
-      expanded,
-    });
-    this.container.addChild(body);
-    this.requestRender();
+  appendTool(text: string, callId?: string): void {
+    this.upsertTool(text, callId, null);
   }
 
   /** Best-effort success/fail tool result chrome when the stream provides it. */
-  appendToolResult(text: string, ok = true): void {
-    this.noteGroup("other");
-    // Prefer collapsed summary for long result bodies; keep box when short.
-    const expanded = !shouldAutoCollapseTool(text);
-    const painted = expanded
-      ? styleToolResult(text, ok)
-      : styleToolCollapsed(
-          text.includes("[")
-            ? text
-            : `${text.split("\n")[0]} [${ok ? "completed" : "failed"}]\n${text.split("\n").slice(1).join("\n")}`.trim(),
-        );
-    const raw = text.includes("[")
-      ? text
-      : `${text.split("\n")[0]} [${ok ? "completed" : "failed"}]\n${text.split("\n").slice(1).join("\n")}`.trim();
-    const body = new Text(painted, 0, 0);
-    this.collapsibles.push({
-      kind: "tool",
-      body,
-      raw,
-      expanded,
-    });
-    this.container.addChild(body);
-    this.requestRender();
+  appendToolResult(text: string, ok = true, callId?: string): void {
+    this.upsertTool(text, callId, ok);
   }
 
   appendReasoning(text: string): void {
     this.noteGroup("other");
+    if (this.thinkSlot) {
+      const merged = mergeStreamText(this.thinkSlot.raw, text, this.mergeMode);
+      if (merged === this.thinkSlot.raw) return;
+      this.thinkSlot.raw = merged;
+      if (!this.thinkSlot.userExpanded) {
+        this.thinkSlot.expanded = !shouldAutoCollapseThink(merged);
+      }
+      this.paintCollapsible(this.thinkSlot);
+      this.requestRender();
+      return;
+    }
+
     const expanded = !shouldAutoCollapseThink(text);
-    const painted = expanded
-      ? styleThinkExpanded(text)
-      : styleThinkCollapsed(text);
-    const body = new Text(painted, 0, 0);
-    this.collapsibles.push({
+    const slot: CollapsibleSlot = {
       kind: "think",
-      body,
+      body: new Text("", 0, 0),
       raw: text,
       expanded,
-    });
-    this.container.addChild(body);
+      userExpanded: false,
+      callId: null,
+      toolOk: null,
+    };
+    this.paintCollapsible(slot);
+    this.thinkSlot = slot;
+    this.collapsibles.push(slot);
+    this.container.addChild(slot.body);
     this.requestRender();
   }
 
@@ -327,6 +348,74 @@ export class TimelineView implements TimelineAppender {
     } else if (this.lastGroupRole == null) {
       this.lastGroupRole = "other";
     }
+  }
+
+  private findAgentSlot(messageId?: string): AgentStreamSlot | null {
+    if (messageId) {
+      return this.agentByMessageId.get(messageId) ?? null;
+    }
+    if (this.agentStream && !this.agentStream.messageId) {
+      return this.agentStream;
+    }
+    return null;
+  }
+
+  private closeThink(): void {
+    this.thinkSlot = null;
+  }
+
+  private upsertTool(
+    text: string,
+    callId: string | undefined,
+    toolOk: boolean | null,
+  ): void {
+    this.closeThink();
+    this.noteGroup("other");
+    const existing = callId ? this.toolsByCallId.get(callId) : undefined;
+    if (existing) {
+      existing.raw = text;
+      existing.toolOk = toolOk;
+      if (!existing.userExpanded) {
+        existing.expanded = !shouldAutoCollapseTool(text);
+      }
+      this.paintCollapsible(existing);
+      this.requestRender();
+      return;
+    }
+
+    const expanded = !shouldAutoCollapseTool(text);
+    const slot: CollapsibleSlot = {
+      kind: "tool",
+      body: new Text("", 0, 0),
+      raw: text,
+      expanded,
+      userExpanded: false,
+      callId: callId ?? null,
+      toolOk,
+    };
+    this.paintCollapsible(slot);
+    if (callId) this.toolsByCallId.set(callId, slot);
+    this.collapsibles.push(slot);
+    this.container.addChild(slot.body);
+    this.requestRender();
+  }
+
+  private paintCollapsible(slot: CollapsibleSlot): void {
+    if (slot.kind === "think") {
+      slot.body.setText(
+        slot.expanded ? styleThinkExpanded(slot.raw) : styleThinkCollapsed(slot.raw),
+      );
+      return;
+    }
+    if (!slot.expanded) {
+      slot.body.setText(styleToolCollapsed(slot.raw));
+      return;
+    }
+    if (slot.toolOk == null) {
+      slot.body.setText(styleToolBlock(slot.raw));
+      return;
+    }
+    slot.body.setText(styleToolResult(slot.raw, slot.toolOk));
   }
 
   private promoteAgentToMarkdown(slot: AgentStreamSlot): void {

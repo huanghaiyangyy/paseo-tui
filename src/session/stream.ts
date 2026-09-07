@@ -1,62 +1,17 @@
-import type { PaseoAgentStream, PaseoAgentUpdate } from "@getpaseo/client";
+import type {
+  PaseoAgent,
+  PaseoAgentStream,
+  PaseoAgentUpdate,
+} from "@getpaseo/client";
 import type { AgentPermissionRequest } from "@getpaseo/protocol/agent-types";
 import type { TimelineAppender } from "../commands/types.js";
+import { formatToolCallText, toolCallId } from "./tool-format.js";
+
+export { formatToolInputPreview, formatToolCallText } from "./tool-format.js";
+export { mergeStreamText } from "./merge-text.js";
 
 function has(t: TimelineAppender, key: keyof TimelineAppender): boolean {
   return typeof (t as Record<string, unknown>)[key as string] === "function";
-}
-
-function summarizeTool(item: {
-  name: string;
-  status: string;
-  error?: unknown;
-}): string {
-  const err =
-    item.status === "failed" && item.error != null
-      ? ` — ${typeof item.error === "string" ? item.error : JSON.stringify(item.error)}`
-      : "";
-  return `${item.name} [${item.status}]${err}`;
-}
-
-/** Best-effort preview of tool input for the bordered tool body. */
-export function formatToolInputPreview(detail: unknown): string | null {
-  if (detail == null || typeof detail !== "object") return null;
-  const d = detail as Record<string, unknown>;
-  const input = d.input;
-  if (input == null) return null;
-  if (typeof input === "string") {
-    const t = input.trim();
-    return t.length ? t : null;
-  }
-  if (typeof input !== "object") {
-    return String(input);
-  }
-  const obj = input as Record<string, unknown>;
-  for (const key of [
-    "command",
-    "cmd",
-    "script",
-    "code",
-    "query",
-    "path",
-    "file",
-    "pattern",
-    "url",
-    "text",
-    "content",
-  ]) {
-    const v = obj[key];
-    if (typeof v === "string" && v.trim()) {
-      return v.trim();
-    }
-  }
-  try {
-    const json = JSON.stringify(obj);
-    if (!json || json === "{}") return null;
-    return json.length > 160 ? json.slice(0, 157) + "…" : json;
-  } catch {
-    return null;
-  }
 }
 
 export function formatPermissionBrief(req: AgentPermissionRequest): string {
@@ -79,36 +34,110 @@ function emitTool(
   timeline: TimelineAppender,
   item: Record<string, unknown>,
 ): void {
-  const name = typeof item.name === "string" ? item.name : "tool";
   const status = typeof item.status === "string" ? item.status : "?";
-  const header = summarizeTool({
-    name,
-    status,
-    error: item.error,
-  });
-  const preview = formatToolInputPreview(item.detail);
-  const text = preview ? `${header}\n${preview}` : header;
+  const text = formatToolCallText(item);
+  const callId = toolCallId(item);
 
   const failed = status === "failed" || status === "error" || status === "errored";
   const completed =
     status === "completed" ||
     status === "success" ||
     status === "succeeded" ||
-    status === "done";
+    status === "done" ||
+    status === "canceled";
 
   if (
     (failed || completed) &&
     has(timeline, "appendToolResult") &&
     timeline.appendToolResult
   ) {
-    timeline.appendToolResult(text, !failed);
+    timeline.appendToolResult(text, !failed, callId);
     return;
   }
 
   if (has(timeline, "appendTool") && timeline.appendTool) {
-    timeline.appendTool(text);
+    timeline.appendTool(text, callId);
   } else {
     timeline.appendSystem(`tool › ${text}`);
+  }
+}
+
+export type HandleTimelineItemOptions = {
+  /** History snapshots: render assistant as finished Markdown, not a live delta. */
+  snapshot?: boolean;
+};
+
+/** Apply one timeline item (live stream or projected history). */
+export function handleTimelineItem(
+  timeline: TimelineAppender,
+  item: Record<string, unknown>,
+  options?: HandleTimelineItemOptions,
+): void {
+  if (!item || typeof item.type !== "string") return;
+  const snapshot = options?.snapshot === true;
+
+  switch (item.type) {
+    case "user_message": {
+      const text = typeof item.text === "string" ? item.text : "";
+      const begin = timeline as {
+        wasLocalUserEcho?: (t: string) => boolean;
+      };
+      if (begin.wasLocalUserEcho?.(text)) return;
+      timeline.appendUser(text);
+      break;
+    }
+    case "assistant_message": {
+      const text = typeof item.text === "string" ? item.text : "";
+      const messageId =
+        typeof item.messageId === "string" ? item.messageId : undefined;
+      if (snapshot) {
+        timeline.appendAgent(text, messageId);
+        break;
+      }
+      if (has(timeline, "appendAgentDelta") && timeline.appendAgentDelta) {
+        timeline.appendAgentDelta(text, messageId);
+      } else {
+        timeline.appendAgent(text, messageId);
+      }
+      break;
+    }
+    case "reasoning": {
+      const text = typeof item.text === "string" ? item.text : "";
+      if (has(timeline, "appendReasoning") && timeline.appendReasoning) {
+        timeline.appendReasoning(text);
+      } else {
+        timeline.appendSystem(`think › ${text}`);
+      }
+      break;
+    }
+    case "tool_call": {
+      emitTool(timeline, item);
+      break;
+    }
+    case "error": {
+      const message =
+        typeof item.message === "string" ? item.message : "unknown error";
+      timeline.appendError(message);
+      break;
+    }
+    case "todo": {
+      const items = Array.isArray(item.items) ? item.items : [];
+      const done = items.filter((row) => {
+        if (!row || typeof row !== "object") return false;
+        return (row as { completed?: unknown }).completed === true;
+      }).length;
+      timeline.appendSystem(
+        items.length ? `todo ${done}/${items.length}` : "todo list updated",
+      );
+      break;
+    }
+    case "compaction": {
+      const status = typeof item.status === "string" ? item.status : "";
+      timeline.appendSystem(`compaction ${status}`.trim());
+      break;
+    }
+    default:
+      break;
   }
 }
 
@@ -124,58 +153,8 @@ export function handleAgentStream(
   switch (event.type) {
     case "timeline": {
       const item = event.item as Record<string, unknown> | undefined;
-      if (!item || typeof item.type !== "string") return;
-      switch (item.type) {
-        case "user_message": {
-          const text = typeof item.text === "string" ? item.text : "";
-          const begin = timeline as {
-            wasLocalUserEcho?: (t: string) => boolean;
-          };
-          if (begin.wasLocalUserEcho?.(text)) return;
-          timeline.appendUser(text);
-          break;
-        }
-        case "assistant_message": {
-          const text = typeof item.text === "string" ? item.text : "";
-          const messageId =
-            typeof item.messageId === "string" ? item.messageId : undefined;
-          if (has(timeline, "appendAgentDelta") && timeline.appendAgentDelta) {
-            timeline.appendAgentDelta(text, messageId);
-          } else {
-            timeline.appendAgent(text);
-          }
-          break;
-        }
-        case "reasoning": {
-          const text = typeof item.text === "string" ? item.text : "";
-          if (has(timeline, "appendReasoning") && timeline.appendReasoning) {
-            timeline.appendReasoning(text);
-          } else {
-            timeline.appendSystem(`think › ${text}`);
-          }
-          break;
-        }
-        case "tool_call": {
-          emitTool(timeline, item);
-          break;
-        }
-        case "error": {
-          const message =
-            typeof item.message === "string" ? item.message : "unknown error";
-          timeline.appendError(message);
-          break;
-        }
-        case "todo":
-          timeline.appendSystem("todo list updated");
-          break;
-        case "compaction": {
-          const status = typeof item.status === "string" ? item.status : "";
-          timeline.appendSystem(`compaction ${status}`.trim());
-          break;
-        }
-        default:
-          break;
-      }
+      if (!item) return;
+      handleTimelineItem(timeline, item);
       break;
     }
     case "permission_requested": {
@@ -198,14 +177,17 @@ export function handleAgentStream(
       timeline.appendSystem("turn started…");
       break;
     case "turn_completed":
+      timeline.finalizeAgentStream?.();
       timeline.appendSystem("turn completed");
       break;
     case "turn_failed":
+      timeline.finalizeAgentStream?.();
       timeline.appendError(
         typeof event.error === "string" ? event.error : "turn failed",
       );
       break;
     case "turn_canceled":
+      timeline.finalizeAgentStream?.();
       timeline.appendSystem(
         `turn canceled: ${typeof event.reason === "string" ? event.reason : ""}`.trim(),
       );
@@ -237,6 +219,7 @@ export function handleAgentUpdate(
   options?: {
     onPermissions?: (reqs: AgentPermissionRequest[]) => void;
     shouldAnnouncePermission?: (req: AgentPermissionRequest) => boolean;
+    onSnapshot?: (agent: PaseoAgent) => void;
   },
 ): void {
   if (!update || typeof update !== "object") return;
@@ -246,11 +229,9 @@ export function handleAgentUpdate(
   }
   if (update.kind !== "upsert") return;
   const agent = update.agent;
+  options?.onSnapshot?.(agent);
   if (agent.lastError) {
     timeline.appendError(String(agent.lastError));
-  }
-  if (typeof agent.status === "string") {
-    timeline.appendSystem(`status → ${agent.status}`);
   }
   const pending = (agent.pendingPermissions ?? []) as AgentPermissionRequest[];
   if (pending.length > 0) {
